@@ -5,6 +5,11 @@ import '../models/video_models.dart';
 import '../services/tbox_api_service.dart';
 import '../../../core/database/database.dart' hide VideoSource;
 import '../../../core/database/database_provider.dart';
+import '../../../core/services/player_metrics_service.dart';
+import '../../../core/services/video_cache_service.dart';
+import '../../../core/services/preload_service.dart';
+import '../../../core/services/power_manager_service.dart';
+import '../../../core/network/network_engine.dart';
 import 'package:logger/logger.dart';
 
 final _logger = Logger(printer: PrettyPrinter(methodCount: 0));
@@ -248,7 +253,7 @@ class VideoListNotifier extends AsyncNotifier<VideoListState> {
   }
 }
 
-// ===== 影片详情 Provider（换源并行化，缓存） =====
+// ===== 影片详情 Provider（换源并行化，缓存，DNS预解析） =====
 final videoDetailProvider = FutureProvider.family<VideoDetail, ({String vodId, String sourceKey})>((ref, params) async {
   // 保持缓存，返回详情页时不重新加载
   // ignore: unused_result
@@ -256,53 +261,27 @@ final videoDetailProvider = FutureProvider.family<VideoDetail, ({String vodId, S
   final sites = ref.read(enabledSitesProvider);
   final api = ref.read(videoApiServiceProvider);
 
-  // 从原始站点获取详情
-  final originalSite = sites.where((s) => s.key == params.sourceKey).firstOrNull;
-  if (originalSite == null) throw Exception('站点不存在');
+  // DNS 预解析：提前解析所有站点域名（不阻塞主流程）
+  final allApiUrls = sites.map((s) => s.apiUrl).toList();
+  api.prefetchDns(allApiUrls);
 
-  final detail = await api.fetchVideoDetail(originalSite.apiUrl, params.vodId, sourceKey: params.sourceKey);
-
-  // 并行从其他站点搜索同一影片（换源）
+  // 使用优化后的并行请求方法
   final otherSites = sites.where((s) => s.key != params.sourceKey).toList();
-  final List<PlaySource> allSources = [...detail.playSources];
-
-  // 并行搜索，每个站点超时 5 秒
-  final futures = otherSites.map((site) async {
-    try {
-      final searchResult = await api.searchVideos(site.apiUrl, detail.vodName).timeout(const Duration(seconds: 5));
-      if (searchResult.list.isNotEmpty) {
-        final matchedItem = searchResult.list.first;
-        final otherDetail = await api.fetchVideoDetail(site.apiUrl, matchedItem.vodId, sourceKey: site.key).timeout(const Duration(seconds: 5));
-        return otherDetail.playSources.map((source) => PlaySource(
-          name: '${site.name}-${source.name}',
-          episodes: source.episodes,
-        )).toList();
-      }
-    } catch (e) {
-      _logger.d('换源搜索 ${site.name} 失败: $e');
-    }
-    return <PlaySource>[];
-  }).toList();
-
-  final results = await Future.wait(futures);
-  for (final sources in results) {
-    allSources.addAll(sources);
+  try {
+    final detail = await api.fetchVideoDetailParallel(
+      sites.firstWhere((s) => s.key == params.sourceKey).apiUrl,
+      params.vodId,
+      sourceKey: params.sourceKey,
+      otherSites: otherSites,
+    );
+    return detail;
+  } catch (e) {
+    _logger.e('并行获取详情失败，回退到单源获取: $e');
+    // 回退：仅从原始站点获取
+    final originalSite = sites.where((s) => s.key == params.sourceKey).firstOrNull;
+    if (originalSite == null) throw Exception('站点不存在');
+    return api.fetchVideoDetail(originalSite.apiUrl, params.vodId, sourceKey: params.sourceKey);
   }
-
-  return VideoDetail(
-    vodId: detail.vodId,
-    vodName: detail.vodName,
-    vodPic: detail.vodPic,
-    vodContent: detail.vodContent,
-    vodActor: detail.vodActor,
-    vodDirector: detail.vodDirector,
-    vodYear: detail.vodYear,
-    vodArea: detail.vodArea,
-    vodRemarks: detail.vodRemarks,
-    typeName: detail.typeName,
-    sourceKey: detail.sourceKey,
-    playSources: allSources,
-  );
 });
 
 // ===== 搜索 Provider（防抖 + 多源搜索） =====
@@ -506,4 +485,56 @@ class FavoriteActions {
 final downloadTasksProvider = StreamProvider<List<DownloadTask>>((ref) {
   final db = ref.watch(databaseProvider);
   return db.watchAllDownloadTasks();
+});
+
+// ===== 优化服务 Provider =====
+
+/// 播放器性能监控服务
+final playerMetricsServiceProvider = Provider<PlayerMetricsService>((ref) {
+  return PlayerMetricsService.instance;
+});
+
+/// 视频缓存服务
+final videoCacheServiceProvider = Provider<VideoCacheService>((ref) {
+  final service = VideoCacheService.instance;
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
+/// 预加载服务
+final preloadServiceProvider = Provider<PreloadService>((ref) {
+  final cacheService = ref.read(videoCacheServiceProvider);
+  return PreloadService(cacheService: cacheService);
+});
+
+/// 功耗管理服务
+final powerManagerServiceProvider = Provider<PowerManagerService>((ref) {
+  final service = PowerManagerService.instance;
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
+/// 网络引擎
+final networkEngineProvider = Provider<NetworkEngine>((ref) {
+  return NetworkEngine.instance;
+});
+
+/// 网络状态 Provider（实时监听网络条件变化）
+final networkConditionProvider = StreamProvider<NetworkCondition>((ref) {
+  return NetworkEngine.instance.onConditionChanged;
+});
+
+/// 缓存统计 Provider
+final cacheStatsProvider = StreamProvider<CacheStats>((ref) {
+  return VideoCacheService.instance.statsStream;
+});
+
+/// 播放指标 Provider（实时监听播放质量变化）
+final playbackMetricsProvider = StreamProvider<PlaybackMetrics>((ref) {
+  return PlayerMetricsService.instance.metricsStream;
+});
+
+/// 功耗模式 Provider
+final powerModeProvider = StreamProvider<PowerMode>((ref) {
+  return PowerManagerService.instance.onModeChanged;
 });
