@@ -199,13 +199,12 @@ class NetworkEngine {
     ));
 
     // 启用 HTTP/2 和连接池优化
-    (_dio.httpClientAdapter as IOHttpClientAdapter).onHttpClientCreate =
-        (client) {
-      client
-        ..badCertificateCallback = (cert, host, port) => true
-        // 连接池优化：每主机最大连接数8，空闲超时30秒
-        ..maxConnectionsPerHost = 8
-        ..idleTimeout = const Duration(seconds: 30);
+    (_dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
+      final client = HttpClient();
+      client.badCertificateCallback = (cert, host, port) => true;
+      // 连接池优化：每主机最大连接数8，空闲超时30秒
+      client.maxConnectionsPerHost = 8;
+      client.idleTimeout = const Duration(seconds: 30);
       return client;
     };
 

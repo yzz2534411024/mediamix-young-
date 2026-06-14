@@ -481,7 +481,7 @@ class VideoCacheService {
       await _saveIndexToDisk();
       _notifyStats();
 
-      _logger.i('视频已缓存(L3): $videoId@$q, 大小: ${(fileSize / 1024 / 1024).toStringAsFixed(1)}MB');
+      _logger.i('视频已缓存(L3): $videoId@$quality, 大小: ${(fileSize / 1024 / 1024).toStringAsFixed(1)}MB');
 
       // 检查是否需要触发淘汰
       await _checkEvictionNeeded();
@@ -544,7 +544,7 @@ class VideoCacheService {
       await _saveIndexToDisk();
       _notifyStats();
 
-      _logger.d('分段已缓存: $videoId/$segmentKey@$q, 大小: ${data.length}B');
+      _logger.d('分段已缓存: $videoId/$segmentKey@$quality, 大小: ${data.length}B');
     } catch (e) {
       _logger.e('缓存分段失败: $videoId/$segmentKey, 错误: $e');
     }

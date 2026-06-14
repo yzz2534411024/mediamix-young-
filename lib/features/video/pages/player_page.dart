@@ -89,7 +89,7 @@ class _BufferManager {
   bool _isLowBuffer = false;
 
   /// 缓冲状态变化回调
-  final void Function(bool isLow)? onBufferStateChanged;
+  void Function(bool isLow)? onBufferStateChanged;
 
   /// 网络条件到水位线的映射
   static _BufferWaterLines _waterLinesForCondition(NetworkCondition condition) {
@@ -193,7 +193,7 @@ class _ABRController {
   _QualityLevel _currentQuality = _QualityLevel.medium;
 
   /// 画质变化回调
-  final void Function(_QualityLevel level)? onQualityChanged;
+  void Function(_QualityLevel level)? onQualityChanged;
 
   _ABRController({this.onQualityChanged});
 
@@ -296,14 +296,13 @@ class _ABRController {
 
 /// 画质等级
 enum _QualityLevel {
-  low('流畅', 0),
-  medium('标清', 1),
-  high('高清', 2),
-  ultra('超清', 3);
+  low('流畅'),
+  medium('标清'),
+  high('高清'),
+  ultra('超清');
 
   final String label;
-  final int index;
-  const _QualityLevel(this.label, this.index);
+  const _QualityLevel(this.label);
 }
 
 class PlayerPage extends ConsumerStatefulWidget {

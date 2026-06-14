@@ -9,7 +9,7 @@ import '../../../core/services/player_metrics_service.dart';
 import '../../../core/services/video_cache_service.dart';
 import '../../../core/services/preload_service.dart';
 import '../../../core/services/power_manager_service.dart';
-import '../../../core/network/network_engine.dart';
+import '../../../core/network/network_engine.dart' hide CacheStats;
 import 'package:logger/logger.dart';
 
 final _logger = Logger(printer: PrettyPrinter(methodCount: 0));
