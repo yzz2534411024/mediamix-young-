@@ -5,6 +5,7 @@ import 'package:media_kit/media_kit.dart';
 import 'app/router.dart';
 import 'core/services/theme_provider.dart';
 import 'core/services/video_cache_service.dart';
+import 'features/video/models/video_models.dart';
 import 'core/services/power_manager_service.dart';
 import 'core/services/privacy_manager_service.dart';
 import 'core/services/metrics_collector_service.dart';
@@ -21,7 +22,7 @@ void main() async {
   // 初始化优化服务
   await _initializeServices();
 
-  runApp(const ProviderScope(child: MediaMixApp()));
+  runApp(const ProviderScope(child: YoungApp()));
 }
 
 /// 初始化所有优化服务
@@ -48,12 +49,10 @@ Future<void> _initializeServices() async {
     debugPrint('隐私管理服务初始化失败: $e');
   }
 
-  // 初始化指标采集和数据上报服务（需要数据库实例）
+  // 初始化指标采集和数据上报服务
   try {
-    // 创建临时数据库实例用于初始化
-    final db = AppDatabase();
-    MetricsCollectorService.instance.initialize(db);
-    DataReporterService.instance.initialize(db);
+    MetricsCollectorService.instance.initialize(AppDatabase.instance);
+    await DataReporterService.instance.initialize(AppDatabase.instance);
   } catch (e) {
     debugPrint('指标服务初始化失败: $e');
   }
@@ -61,27 +60,25 @@ Future<void> _initializeServices() async {
   // DNS 预解析：提前解析内置站点域名
   try {
     final engine = NetworkEngine.instance;
-    final builtinUrls = [
-      'https://bfzyapi.com',
-      'https://cjhd.lziapi.com',
-      'https://cjhd.ffzyapi.com',
-      'http://api.1080zyku.com',
-      'http://hongniuzy2.com',
-    ];
+    final builtinUrls =
+        CmsApiSite.defaultSites.map((s) {
+          final uri = Uri.parse(s.apiUrl);
+          return '${uri.scheme}://${uri.host}';
+        }).toSet().toList();
     await engine.preResolveDns(builtinUrls);
   } catch (e) {
     debugPrint('DNS 预解析失败: $e');
   }
 }
 
-class MediaMixApp extends ConsumerStatefulWidget {
-  const MediaMixApp({super.key});
+class YoungApp extends ConsumerStatefulWidget {
+  const YoungApp({super.key});
 
   @override
-  ConsumerState<MediaMixApp> createState() => _MediaMixAppState();
+  ConsumerState<YoungApp> createState() => _YoungAppState();
 }
 
-class _MediaMixAppState extends ConsumerState<MediaMixApp> {
+class _YoungAppState extends ConsumerState<YoungApp> {
   bool _hasCheckedConsent = false;
 
   @override
@@ -101,7 +98,7 @@ class _MediaMixAppState extends ConsumerState<MediaMixApp> {
         }
 
         return MaterialApp.router(
-          title: 'MediaMix',
+          title: 'Young',
           debugShowCheckedModeBanner: false,
           theme: ThemeData(
             colorSchemeSeed: const Color(0xFF6750A4),

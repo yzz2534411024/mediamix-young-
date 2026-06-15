@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:logger/logger.dart';
+import '../utils/hash_utils.dart';
 
 /// 缓存条目
 class _CacheEntry {
@@ -30,7 +31,7 @@ class CacheService {
 
   /// 保存缓存到内存和本地文件
   Future<void> saveCache(String key, Map<String, dynamic> data) async {
-    final cacheKey = _hashKey(key);
+    final cacheKey = hashKey(key);
     final entry = _CacheEntry(data: data, timestamp: DateTime.now());
 
     // 保存到内存
@@ -57,7 +58,7 @@ class CacheService {
     String key, {
     Duration maxAge = const Duration(minutes: 30),
   }) async {
-    final cacheKey = _hashKey(key);
+    final cacheKey = hashKey(key);
 
     // 先从内存缓存获取
     final memEntry = _memoryCache[cacheKey];
@@ -102,7 +103,7 @@ class CacheService {
 
   /// 清除指定缓存
   Future<void> clearCache(String key) async {
-    final cacheKey = _hashKey(key);
+    final cacheKey = hashKey(key);
 
     // 清除内存缓存
     _memoryCache.remove(cacheKey);
@@ -154,13 +155,4 @@ class CacheService {
     return cacheDir;
   }
 
-  /// 使用 URL 的 hash 值作为缓存 key
-  String _hashKey(String key) {
-    var hash = 0;
-    for (int i = 0; i < key.length; i++) {
-      hash = ((hash << 5) - hash) + key.codeUnitAt(i);
-      hash = hash & 0x7FFFFFFF; // 保持为正整数
-    }
-    return hash.toRadixString(36);
-  }
 }

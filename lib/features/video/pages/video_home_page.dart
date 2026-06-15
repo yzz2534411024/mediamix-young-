@@ -80,7 +80,7 @@ class _VideoHomePageState extends ConsumerState<VideoHomePage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('MediaMix'),
+        title: const Text('Young'),
         centerTitle: false,
         actions: [
           IconButton(

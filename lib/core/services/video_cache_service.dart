@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:logger/logger.dart';
+import '../utils/hash_utils.dart';
 
 // ============================================================
 // 数据类与枚举
@@ -288,6 +289,9 @@ class VideoCacheService {
   /// key: cacheId → CacheEntry
   final Map<String, CacheEntry> _diskIndex = {};
 
+  /// 磁盘缓存总大小缓存（避免每次 O(n) 遍历 _diskIndex）
+  int _cachedDiskTotalSize = 0;
+
   // ----------------------------------------------------------
   // 统计与状态
   // ----------------------------------------------------------
@@ -478,6 +482,7 @@ class VideoCacheService {
       );
 
       _diskIndex[cacheId] = entry;
+      _addToDiskTotal(entry.fileSize);
       await _saveIndexToDisk();
       _notifyStats();
 
@@ -527,6 +532,7 @@ class VideoCacheService {
         if (!existing.segments.contains(segmentKey)) {
           existing.segments.add(segmentKey);
         }
+        _addToDiskTotal(data.length);
         existing.fileSize += data.length;
         existing.lastAccess = DateTime.now();
       } else {
@@ -539,6 +545,7 @@ class VideoCacheService {
           segments: [segmentKey],
           isComplete: false,
         );
+        _addToDiskTotal(data.length);
       }
 
       await _saveIndexToDisk();
@@ -787,13 +794,7 @@ class VideoCacheService {
 
   /// 生成缓存ID
   String _generateCacheId(String videoId, String quality) {
-    final raw = '${videoId}_$quality';
-    var hash = 0;
-    for (int i = 0; i < raw.length; i++) {
-      hash = ((hash << 5) - hash) + raw.codeUnitAt(i);
-      hash = hash & 0x7FFFFFFF;
-    }
-    return hash.toRadixString(36);
+    return hashKey('${videoId}_$quality');
   }
 
   // ============================================================
@@ -827,6 +828,7 @@ class VideoCacheService {
         }
       }
 
+      _recomputeDiskTotal();
       _logger.d('磁盘索引已加载，条目数: ${_diskIndex.length}');
     } catch (e) {
       _logger.w('加载磁盘索引失败: $e');
@@ -882,34 +884,50 @@ class VideoCacheService {
   Future<int> _getAvailableDiskSpace() async {
     try {
       final appDir = await getApplicationDocumentsDirectory();
-      final stat = await appDir.stat();
-      // stat.type 在某些平台不提供磁盘信息，降级返回默认值
-      return _maxCacheBytes * 10;
+      if (Platform.isAndroid || Platform.isLinux) {
+        final result =
+            await Process.run('df', ['-B1', appDir.path],
+                runInShell: true);
+        if (result.exitCode == 0) {
+          final lines =
+              (result.stdout as String).split('\n');
+          if (lines.length >= 2) {
+            final parts =
+                lines[1].trim().split(RegExp(r'\s+'));
+            if (parts.length >= 4) {
+              final available =
+                  int.tryParse(parts[3]);
+              if (available != null &&
+                  available > 0) {
+                return available;
+              }
+            }
+          }
+        }
+      }
     } catch (e) {
-      return _maxCacheBytes * 10;
+      _logger.w('获取磁盘可用空间失败: $e');
     }
+    return _maxCacheBytes * 10;
   }
 
   /// 计算当前磁盘缓存使用率百分比
   Future<double> _getDiskUsagePercent() async {
     final maxSize = await _getMaxCacheSize();
     if (maxSize <= 0) return 0.0;
-
-    int totalSize = 0;
-    for (final entry in _diskIndex.values) {
-      totalSize += entry.fileSize;
-    }
-
-    return (totalSize / maxSize) * 100.0;
+    return (_cachedDiskTotalSize / maxSize) * 100.0;
   }
 
   /// 计算当前缓存总大小
-  int _calculateTotalCacheSize() {
-    int total = 0;
+  int _calculateTotalCacheSize() => _cachedDiskTotalSize;
+
+  void _addToDiskTotal(int size) => _cachedDiskTotalSize += size;
+  void _subtractFromDiskTotal(int size) => _cachedDiskTotalSize -= size;
+  void _recomputeDiskTotal() {
+    _cachedDiskTotalSize = 0;
     for (final entry in _diskIndex.values) {
-      total += entry.fileSize;
+      _cachedDiskTotalSize += entry.fileSize;
     }
-    return total;
   }
 
   // ============================================================
@@ -1099,6 +1117,7 @@ class VideoCacheService {
       _logger.w('删除缓存文件失败: ${entry.filePath}, 错误: $e');
     }
 
+    _subtractFromDiskTotal(entry.fileSize);
     _diskIndex.remove(cacheId);
   }
 
@@ -1106,48 +1125,31 @@ class VideoCacheService {
   // 内部方法 — L1/L2 内存淘汰
   // ============================================================
 
-  /// L1 内存缓存淘汰
-  void _evictL1IfNeeded() {
-    while (_memoryCache.length > _l1MaxEntries) {
-      // 移除最久未访问的条目
+  /// 从 Map 中淘汰最久未访问的条目（通用 LRU）
+  void _evictOldestFromMap<T>(Map<String, T> map, int maxEntries) {
+    while (map.length > maxEntries) {
       String? oldestKey;
       DateTime? oldestTime;
-
-      for (final entry in _memoryCache.entries) {
-        if (oldestTime == null || entry.value.lastAccess.isBefore(oldestTime)) {
+      for (final entry in map.entries) {
+        final lastAccess = (entry.value as dynamic).lastAccess as DateTime;
+        if (oldestTime == null || lastAccess.isBefore(oldestTime)) {
           oldestKey = entry.key;
-          oldestTime = entry.value.lastAccess;
+          oldestTime = lastAccess;
         }
       }
-
       if (oldestKey != null) {
-        _memoryCache.remove(oldestKey);
+        map.remove(oldestKey);
       } else {
         break;
       }
     }
   }
+
+  /// L1 内存缓存淘汰
+  void _evictL1IfNeeded() => _evictOldestFromMap(_memoryCache, _l1MaxEntries);
 
   /// L2 内存缓存淘汰
-  void _evictL2IfNeeded() {
-    while (_streamCache.length > _l2MaxEntries) {
-      String? oldestKey;
-      DateTime? oldestTime;
-
-      for (final entry in _streamCache.entries) {
-        if (oldestTime == null || entry.value.lastAccess.isBefore(oldestTime)) {
-          oldestKey = entry.key;
-          oldestTime = entry.value.lastAccess;
-        }
-      }
-
-      if (oldestKey != null) {
-        _streamCache.remove(oldestKey);
-      } else {
-        break;
-      }
-    }
-  }
+  void _evictL2IfNeeded() => _evictOldestFromMap(_streamCache, _l2MaxEntries);
 
   // ============================================================
   // 内部方法 — 统计通知

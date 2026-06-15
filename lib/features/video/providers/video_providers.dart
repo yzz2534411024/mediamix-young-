@@ -20,14 +20,8 @@ final _logger = Logger(printer: PrettyPrinter(methodCount: 0));
 // ===== API 服务 Provider =====
 final videoApiServiceProvider = Provider<VideoApiService>((ref) => VideoApiService());
 
-// ===== 站点列表 Provider（修复不可用源） =====
-final cmsSiteListProvider = StateProvider<List<CmsApiSite>>((ref) => const [
-  CmsApiSite(key: 'bfzy', name: '暴风资源', apiUrl: 'https://bfzyapi.com/api.php/provide/vod/', isBuiltIn: true),
-  CmsApiSite(key: 'lzzy', name: '量子资源', apiUrl: 'https://cjhd.lziapi.com/api.php/provide/vod/', isBuiltIn: true),
-  CmsApiSite(key: 'ffzy', name: '非凡资源', apiUrl: 'https://cjhd.ffzyapi.com/api.php/provide/vod/', isBuiltIn: true),
-  CmsApiSite(key: 'zyk1080', name: '1080资源库', apiUrl: 'http://api.1080zyku.com/inc/api.php/provide/vod/', isBuiltIn: true),
-  CmsApiSite(key: 'hnzy', name: '红牛资源', apiUrl: 'http://hongniuzy2.com/api.php/provide/vod/', isBuiltIn: true),
-]);
+// ===== 站点列表 Provider =====
+final cmsSiteListProvider = StateProvider<List<CmsApiSite>>((ref) => CmsApiSite.defaultSites.toList());
 
 /// 启用的站点列表（过滤掉 disabled 的源）
 final enabledSitesProvider = Provider<List<CmsApiSite>>((ref) {
@@ -560,6 +554,7 @@ final dataReporterProvider = Provider<DataReporterService>((ref) {
 });
 
 /// 隐私偏好 Provider（实时监听开关变化）
-final privacyPreferencesProvider = StateProvider<PrivacyPreferences>((ref) {
-  return PrivacyManagerService.instance.preferences;
+final privacyPreferencesProvider = StreamProvider<PrivacyPreferences>((ref) {
+  final service = PrivacyManagerService.instance;
+  return service.preferencesStream;
 });

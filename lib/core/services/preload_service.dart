@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:logger/logger.dart';
 import 'video_cache_service.dart';
-import '../network/network_engine.dart' show NetworkCondition;
+import '../network/network_engine.dart' show NetworkCondition, Semaphore;
 
 /// 预加载优先级枚举
 enum PreloadPriority {
@@ -171,35 +171,6 @@ class PreloadStrategy {
   }
 }
 
-/// 信号量 — 用于并发控制
-class _Semaphore {
-  int _available;
-  final List<Completer<void>> _waitQueue = [];
-
-  _Semaphore(this._available);
-
-  /// 获取一个许可，若无可用则等待
-  Future<void> acquire() async {
-    if (_available > 0) {
-      _available--;
-      return;
-    }
-    final completer = Completer<void>();
-    _waitQueue.add(completer);
-    await completer.future;
-  }
-
-  /// 释放一个许可
-  void release() {
-    if (_waitQueue.isNotEmpty) {
-      final completer = _waitQueue.removeAt(0);
-      completer.complete();
-    } else {
-      _available++;
-    }
-  }
-}
-
 /// 智能视频预加载服务
 ///
 /// 根据用户行为上下文和网络条件，智能地预加载视频内容，
@@ -215,7 +186,7 @@ class PreloadService {
   static const int _maxConcurrency = 3;
 
   /// 并发信号量
-  final _Semaphore _semaphore = _Semaphore(_maxConcurrency);
+  final Semaphore _semaphore = Semaphore(_maxConcurrency);
 
   /// 当前网络条件
   NetworkCondition _networkCondition = NetworkCondition.wifi;

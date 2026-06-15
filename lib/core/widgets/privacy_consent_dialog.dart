@@ -26,7 +26,7 @@ class PrivacyConsentDialog extends StatelessWidget {
           children: [
             Icon(Icons.security, color: Theme.of(context).colorScheme.primary),
             const SizedBox(width: 12),
-            const Text('帮助改善 MediaMix'),
+            const Text('帮助改善 Young'),
           ],
         ),
         content: const Column(

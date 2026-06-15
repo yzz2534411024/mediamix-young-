@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:logger/logger.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../database/database.dart';
 import 'privacy_manager_service.dart';
 import '../network/network_engine.dart';
@@ -84,11 +85,14 @@ class DataReporterService {
   String get apiEndpoint => _apiEndpoint;
 
   /// 初始化
-  void initialize(AppDatabase db, {String? apiEndpoint}) {
+  Future<void> initialize(AppDatabase db, {String? apiEndpoint}) async {
     _db = db;
     if (apiEndpoint != null) {
       _apiEndpoint = apiEndpoint;
     }
+
+    // 预加载设备 ID
+    await _loadDeviceId();
 
     // 启动定时自动上报
     _startAutoUpload();
@@ -290,19 +294,41 @@ class DataReporterService {
     }
   }
 
-  /// 判断当前是否为 WiFi 连接
+  /// 判断当前是否为 WiFi 连接（带缓存，避免启动时误判）
+  bool? _lastKnownWifi;
+
   bool _isWifiConnection() {
-    // 通过 NetworkEngine 的带宽估算粗略判断
-    // WiFi 通常 > 5Mbps
     final bandwidth = NetworkEngine.instance.currentBandwidthKbps;
-    return bandwidth > 5000;
+    // 带宽未初始化（=0）时返回上次已知状态，若从未采样则假设 WiFi
+    if (bandwidth <= 0) {
+      return _lastKnownWifi ?? true;
+    }
+    _lastKnownWifi = bandwidth > 5000;
+    return _lastKnownWifi!;
   }
 
-  /// 生成匿名设备 ID（基于持久化的随机值）
+  static const _keyDeviceId = 'data_reporter_device_id';
+  String? _cachedDeviceId;
+
+  /// 从 SharedPreferences 加载设备 ID（初始化时调用一次）
+  Future<void> _loadDeviceId() async {
+    try {
+      final sp = await SharedPreferences.getInstance();
+      _cachedDeviceId = sp.getString(_keyDeviceId);
+      if (_cachedDeviceId == null || _cachedDeviceId!.isEmpty) {
+        _cachedDeviceId =
+            'device_${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
+        await sp.setString(_keyDeviceId, _cachedDeviceId!);
+      }
+    } catch (e) {
+      _cachedDeviceId =
+          'device_${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
+    }
+  }
+
+  /// 获取设备 ID（同步，需在 [_loadDeviceId] 后调用）
   String _getDeviceId() {
-    // 简单实现：使用时间戳+随机数的哈希
-    // 生产环境应使用 device_info_plus 获取稳定设备标识
-    return 'device_${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
+    return _cachedDeviceId ?? 'device_unknown';
   }
 
   /// 获取本地数据统计摘要

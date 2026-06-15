@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:logger/logger.dart';
+import '../network/network_engine.dart' show BandwidthEstimator;
 
 // ============================================================================
 // 播放性能监控指标服务
@@ -148,103 +149,6 @@ class PlaybackMetrics {
   }
 }
 
-/// 带宽估计器 — 基于优化文档 4.2.1 中 EWMA（指数加权移动平均）算法
-///
-/// 算法核心：
-///   bandwidth = α × 最新采样带宽 + (1 - α) × 历史带宽
-///   α = 0.7（对最新数据更敏感，快速响应带宽变化）
-///   过滤：排除 TCP 慢启动阶段的前 3 个采样
-class BandwidthEstimator {
-  /// EWMA 平滑因子，α = 0.7 保证对最新数据更敏感
-  final double alpha;
-
-  /// 滑动窗口大小，保留最近的采样点
-  final int windowSize;
-
-  /// TCP 慢启动阶段需要跳过的采样数
-  static const int _slowStartSkipCount = 3;
-
-  /// 当前 EWMA 估计值（单位 kbps）
-  double _estimate = 0.0;
-
-  /// 峰值带宽（单位 kbps）
-  double _peak = 0.0;
-
-  /// 采样历史（滑动窗口）
-  final List<double> _samples = [];
-
-  /// 已接收的有效采样数（用于判断是否还在慢启动阶段）
-  int _validSampleCount = 0;
-
-  BandwidthEstimator({
-    this.alpha = 0.7,
-    this.windowSize = 20,
-  });
-
-  /// 添加一个带宽采样
-  ///
-  /// [bytesDownloaded] 本次下载的字节数
-  /// [durationMs] 本次下载耗时（单位 ms）
-  void addSample(int bytesDownloaded, int durationMs) {
-    if (durationMs <= 0 || bytesDownloaded <= 0) return;
-
-    // 计算瞬时带宽（kbps）
-    final instantKbps = (bytesDownloaded * 8.0) / (durationMs / 1000.0) / 1000.0;
-
-    _validSampleCount++;
-
-    // 过滤 TCP 慢启动阶段的前 3 个采样（异常值偏高或偏低）
-    if (_validSampleCount <= _slowStartSkipCount) {
-      // 慢启动阶段仅记录，不参与 EWMA 计算
-      _samples.add(instantKbps);
-      if (_samples.length > windowSize) {
-        _samples.removeAt(0);
-      }
-      // 使用慢启动阶段采样的均值作为初始估计
-      _estimate = _samples.reduce((a, b) => a + b) / _samples.length;
-      _peak = _estimate > _peak ? _estimate : _peak;
-      return;
-    }
-
-    // EWMA 计算：bandwidth = α × 最新采样 + (1 - α) × 历史带宽
-    _estimate = alpha * instantKbps + (1 - alpha) * _estimate;
-
-    // 更新峰值
-    if (_estimate > _peak) {
-      _peak = _estimate;
-    }
-
-    // 维护滑动窗口
-    _samples.add(instantKbps);
-    if (_samples.length > windowSize) {
-      _samples.removeAt(0);
-    }
-  }
-
-  /// 获取当前带宽估计值（单位 kbps）
-  double estimate() => _estimate;
-
-  /// 获取峰值带宽（单位 kbps）
-  double peak() => _peak;
-
-  /// 获取滑动窗口内的采样数
-  int sampleCount() => _samples.length;
-
-  /// 获取滑动窗口内的平均带宽（单位 kbps）
-  double windowAverage() {
-    if (_samples.isEmpty) return 0.0;
-    return _samples.reduce((a, b) => a + b) / _samples.length;
-  }
-
-  /// 重置估计器状态
-  void reset() {
-    _estimate = 0.0;
-    _peak = 0.0;
-    _samples.clear();
-    _validSampleCount = 0;
-  }
-}
-
 /// 告警阈值配置 — 对应优化文档 7.1 中的告警阈值
 class AlertThresholds {
   /// 首屏时间阈值（单位 ms），超过则告警。文档阈值：> 3s
@@ -373,7 +277,7 @@ class PlayerMetricsService {
   String? get currentSessionId => _currentSession?.sessionId;
 
   /// 当前带宽估计值（kbps）
-  double get currentBandwidthEstimate => _bandwidthEstimator.estimate();
+  double get currentBandwidthEstimate => _bandwidthEstimator.estimateBandwidth();
 
   /// 更新告警阈值配置
   void setAlertThresholds(AlertThresholds thresholds) {
@@ -488,8 +392,8 @@ class PlayerMetricsService {
     // 处理带宽采样
     if (bytesDownloaded != null && downloadDurationMs != null) {
       _bandwidthEstimator.addSample(bytesDownloaded, downloadDurationMs);
-      _currentMetrics!.avgBandwidthKbps = _bandwidthEstimator.estimate();
-      _currentMetrics!.peakBandwidthKbps = _bandwidthEstimator.peak();
+      _currentMetrics!.avgBandwidthKbps = _bandwidthEstimator.estimateBandwidth();
+      _currentMetrics!.peakBandwidthKbps = _bandwidthEstimator.peak;
     }
 
     // 记录音视频同步偏移
@@ -619,8 +523,8 @@ class PlayerMetricsService {
     }
 
     // 带宽估计
-    _currentMetrics!.avgBandwidthKbps = _bandwidthEstimator.estimate();
-    _currentMetrics!.peakBandwidthKbps = _bandwidthEstimator.peak();
+    _currentMetrics!.avgBandwidthKbps = _bandwidthEstimator.estimateBandwidth();
+    _currentMetrics!.peakBandwidthKbps = _bandwidthEstimator.peak;
   }
 
   // ==========================================================================

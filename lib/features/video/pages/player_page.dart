@@ -1518,7 +1518,6 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     });
 
     // 优化6: 重新开始性能监控会话
-    final videoId = '${widget.title}_$index';
     PlayerMetricsService.instance.startSession(videoId);
     PlayerMetricsService.instance.recordEvent(MetricsEvent.playStart);
     MetricsCollectorService.instance.recordEvent(MetricsEvent.playStart, videoId: videoId);

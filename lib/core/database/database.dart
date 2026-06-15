@@ -123,7 +123,13 @@ class MetricsSessions extends Table {
 
 @DriftDatabase(tables: [VideoSources, PlaybackProgresses, WatchHistories, Favorites, DownloadTasks, MetricsEvents, MetricsSessions])
 class AppDatabase extends _$AppDatabase {
-  AppDatabase() : super(_openConnection());
+  static AppDatabase? _instance;
+  static AppDatabase get instance => _instance ??= AppDatabase._();
+
+  AppDatabase._() : super(_openConnection());
+
+  /// 保留公开构造以兼容 build_runner，但推荐使用 [instance]
+  factory AppDatabase() => instance;
 
   @override
   int get schemaVersion => 7;

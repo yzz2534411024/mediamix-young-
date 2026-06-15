@@ -18,8 +18,19 @@ class BandwidthEstimator {
   // 是否已有初始估算
   bool _initialized = false;
 
+  // 峰值带宽（Kbps）
+  double _peak = 0.0;
+
+  // 滑动窗口采样历史
+  final List<double> _samples = [];
+  static const int _windowSize = 20;
+
   // 每个连接的慢启动样本计数（前3个样本过滤）
   final Map<String, int> _slowStartCount = {};
+  static const int _maxSlowStartEntries = 200;
+
+  // 用于 LRU 淘汰的键插入顺序列表
+  final List<String> _slowStartOrder = [];
 
   // 带宽变化通知流控制器
   final _bandwidthController = StreamController<double>.broadcast();
@@ -27,10 +38,13 @@ class BandwidthEstimator {
   /// 当前估算带宽（Kbps）
   double get currentBandwidthKbps => _estimatedBandwidthKbps;
 
+  /// 峰值带宽（Kbps）
+  double get peak => _peak;
+
   /// 带宽变化通知流
   Stream<double> get onBandwidthChanged => _bandwidthController.stream;
 
-  /// 记录一次下载并更新带宽估算
+  /// 记录一次下载并更新带宽估算（带连接键，用于多 CDN 场景）
   void recordSample({
     required String connectionKey,
     required int bytes,
@@ -39,34 +53,70 @@ class BandwidthEstimator {
     if (duration.inMilliseconds <= 0 || bytes <= 0) return;
 
     // 过滤慢启动样本（每个连接前3个样本）
+    if (!_slowStartCount.containsKey(connectionKey)) {
+      _slowStartOrder.add(connectionKey);
+      if (_slowStartOrder.length > _maxSlowStartEntries) {
+        final oldest = _slowStartOrder.removeAt(0);
+        _slowStartCount.remove(oldest);
+      }
+    }
     _slowStartCount[connectionKey] = (_slowStartCount[connectionKey] ?? 0) + 1;
     if (_slowStartCount[connectionKey]! <= 3) return;
 
-    // 计算本次下载速率（Kbps）
     final kbps = (bytes * 8) / (duration.inMilliseconds / 1000) / 1000;
+    _applySample(kbps);
+  }
+
+  /// 记录一次下载（简化版，无需连接键）
+  void addSample(int bytesDownloaded, int durationMs) {
+    if (durationMs <= 0 || bytesDownloaded <= 0) return;
+    final kbps = (bytesDownloaded * 8.0) / (durationMs / 1000.0) / 1000.0;
+    _applySample(kbps);
+  }
+
+  void _applySample(double kbps) {
+    // 维护滑动窗口
+    _samples.add(kbps);
+    if (_samples.length > _windowSize) {
+      _samples.removeAt(0);
+    }
 
     if (!_initialized) {
-      // 首次估算直接使用样本值
       _estimatedBandwidthKbps = kbps;
       _initialized = true;
     } else {
-      // EWMA 平滑：新估算 = alpha * 新样本 + (1 - alpha) * 旧估算
       _estimatedBandwidthKbps =
           _alpha * kbps + (1 - _alpha) * _estimatedBandwidthKbps;
     }
 
-    // 通知带宽变化
+    // 更新峰值
+    if (_estimatedBandwidthKbps > _peak) {
+      _peak = _estimatedBandwidthKbps;
+    }
+
     _bandwidthController.add(_estimatedBandwidthKbps);
   }
 
   /// 返回当前带宽估算值（Kbps）
   double estimateBandwidth() => _estimatedBandwidthKbps;
 
+  /// 获取滑动窗口内采样数
+  int sampleCount() => _samples.length;
+
+  /// 获取滑动窗口内的平均带宽（Kbps）
+  double windowAverage() {
+    if (_samples.isEmpty) return 0.0;
+    return _samples.reduce((a, b) => a + b) / _samples.length;
+  }
+
   /// 重置估算器状态
   void reset() {
     _estimatedBandwidthKbps = 0;
+    _peak = 0.0;
     _initialized = false;
+    _samples.clear();
     _slowStartCount.clear();
+    _slowStartOrder.clear();
   }
 
   /// 释放资源
@@ -311,7 +361,7 @@ class NetworkEngine {
     await preResolveDns(urls);
 
     final results = <Response>[];
-    final semaphore = _Semaphore(maxConcurrent);
+    final semaphore = Semaphore(maxConcurrent);
     var completed = 0;
 
     final futures = urls.map((url) async {
@@ -409,12 +459,11 @@ class NetworkEngine {
 // ==================== 信号量 ====================
 
 /// 信号量 - 控制并发数
-class _Semaphore {
+class Semaphore {
   int _count;
-  final int _max;
   final List<Completer<void>> _waiters = [];
 
-  _Semaphore(this._max) : _count = _max;
+  Semaphore(int max) : _count = max;
 
   Future<void> acquire() async {
     if (_count > 0) {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:drift/drift.dart' show Value;
 import 'package:logger/logger.dart';
 import '../database/database.dart';
 import 'player_metrics_service.dart';
@@ -96,20 +97,22 @@ class MetricsCollectorService {
       await _db!.insertMetricsSession(MetricsSessionsCompanion.insert(
         sessionId: metrics.sessionId,
         videoId: metrics.videoId,
-        firstFrameTimeMs: metrics.firstFrameTimeMs,
-        bufferingCount: metrics.bufferingCount,
-        bufferingTotalMs: metrics.bufferingTotalMs,
-        stutterRate: metrics.stutterRate,
-        qualityChanges: metrics.qualityChanges,
-        seekCount: metrics.seekCount,
-        seekAvgMs: metrics.seekAvgMs,
-        errorCount: metrics.errorCount,
-        cacheHits: metrics.cacheHits,
-        cacheMisses: metrics.cacheMisses,
-        avgBandwidthKbps: metrics.avgBandwidthKbps,
-        peakBandwidthKbps: metrics.peakBandwidthKbps,
         startTime: metrics.startTime.millisecondsSinceEpoch,
-        endTime: metrics.endTime?.millisecondsSinceEpoch,
+        firstFrameTimeMs: Value(metrics.firstFrameTimeMs),
+        bufferingCount: Value(metrics.bufferingCount),
+        bufferingTotalMs: Value(metrics.bufferingTotalMs),
+        stutterRate: Value(metrics.stutterRate),
+        qualityChanges: Value(metrics.qualityChanges),
+        seekCount: Value(metrics.seekCount),
+        seekAvgMs: Value(metrics.seekAvgMs),
+        errorCount: Value(metrics.errorCount),
+        cacheHits: Value(metrics.cacheHits),
+        cacheMisses: Value(metrics.cacheMisses),
+        avgBandwidthKbps: Value(metrics.avgBandwidthKbps),
+        peakBandwidthKbps: Value(metrics.peakBandwidthKbps),
+        endTime: metrics.endTime != null
+            ? Value(metrics.endTime!.millisecondsSinceEpoch)
+            : const Value.absent(),
       ));
 
       _logger.d('会话汇总已持久化: ${metrics.sessionId}');
@@ -139,7 +142,7 @@ class MetricsCollectorService {
           videoId: event.videoId,
           eventType: event.eventType,
           timestamp: event.timestamp,
-          payloadJson: event.payloadJson,
+          payloadJson: Value(event.payloadJson),
         ));
       } catch (e) {
         _logger.e('持久化事件失败: $e');

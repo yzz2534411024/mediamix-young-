@@ -189,7 +189,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             onTap: () {
               showAboutDialog(
                 context: context,
-                applicationName: 'MediaMix',
+                applicationName: 'Young',
                 applicationVersion: '0.2.0',
                 children: [
                   const Text('跨平台视频点播应用'),

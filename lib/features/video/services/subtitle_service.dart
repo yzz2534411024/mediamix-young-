@@ -100,7 +100,12 @@ class SubtitleService {
   /// 获取当前同步偏移量
   Duration get syncOffset => _syncOffset;
 
-  SubtitleService({Dio? dio}) : _dio = dio ?? Dio();
+  SubtitleService({Dio? dio})
+      : _dio = dio ??
+            Dio(BaseOptions(
+              connectTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(seconds: 30),
+            ));
 
   /// 从 URL 下载 SRT 文件并解析（带缓存）
   Future<List<SubtitleEntry>> loadFromUrl(String url) async {
