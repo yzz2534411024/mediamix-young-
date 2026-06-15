@@ -85,3 +85,4 @@ gh.exe
 # Generated files
 *.lock
 !pubspec.lock
+.git-retry.sh
