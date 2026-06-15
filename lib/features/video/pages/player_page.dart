@@ -8,6 +8,8 @@ import '../../../core/database/database.dart';
 import '../../../core/database/database_provider.dart';
 import '../../../core/services/player_metrics_service.dart';
 import '../../../core/services/power_manager_service.dart';
+import '../../../core/services/video_cache_service.dart';
+import '../../../core/services/metrics_collector_service.dart';
 import '../../../core/network/network_engine.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
@@ -422,6 +424,42 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   StreamSubscription? _bufferSubscription;
   StreamSubscription? _networkConditionSubscription;
 
+  // ========== 缓存深度集成 ==========
+  /// 实际使用的播放 URL（可能是本地缓存路径）
+  String _resolvedUrl = '';
+  /// 是否使用了本地缓存
+  bool _isUsingCache = false;
+
+  /// 解析视频 URL — 优先使用本地缓存
+  Future<String> _resolveVideoUrl(String url, String videoId) async {
+    try {
+      // 检查完整缓存（L3 磁盘缓存）
+      final cachedPath = await VideoCacheService.instance.getCachePath(videoId);
+      if (cachedPath != null) {
+        _logger.i('缓存命中，使用本地文件: $videoId');
+        _isUsingCache = true;
+        PlayerMetricsService.instance.recordEvent(MetricsEvent.cacheHit);
+        MetricsCollectorService.instance.recordEvent(MetricsEvent.cacheHit);
+        return cachedPath;
+      }
+
+      PlayerMetricsService.instance.recordEvent(MetricsEvent.cacheMiss);
+      MetricsCollectorService.instance.recordEvent(MetricsEvent.cacheMiss);
+      _isUsingCache = false;
+    } catch (e) {
+      _logger.w('缓存查询失败，使用网络URL: $e');
+      _isUsingCache = false;
+    }
+    return url;
+  }
+
+  /// 带缓存检查的视频打开
+  Future<void> _openVideoWithCacheCheck(String url, String videoId) async {
+    _resolvedUrl = await _resolveVideoUrl(url, videoId);
+    _logger.i('播放URL解析完成: ${_isUsingCache ? "本地缓存" : "网络"}');
+    _player.open(Media(_resolvedUrl));
+  }
+
   @override
   void initState() {
     super.initState();
@@ -446,9 +484,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     final videoId = '${widget.title}_${widget.episodeIndex ?? 0}';
     PlayerMetricsService.instance.startSession(videoId);
     PlayerMetricsService.instance.recordEvent(MetricsEvent.playStart);
+    MetricsCollectorService.instance.recordEvent(MetricsEvent.playStart, videoId: videoId);
 
-    // 打开媒体
-    _player.open(Media(widget.url));
+    // 缓存深度集成：先检查本地缓存，再决定使用哪个 URL
+    _openVideoWithCacheCheck(widget.url, videoId);
     _player.setRate(_playbackSpeed);
     _currentEpisodeIndex = widget.episodeIndex ?? 0;
     _currentEpisodeName = widget.title;
@@ -457,6 +496,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     _completedSubscription = _player.stream.completed.listen((completed) {
       if (completed) {
         PlayerMetricsService.instance.recordEvent(MetricsEvent.playComplete);
+        MetricsCollectorService.instance.recordEvent(MetricsEvent.playComplete);
         _onPlaybackCompleted();
       }
     });
@@ -470,6 +510,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
       if (!_hasRecordedFirstFrame && position > Duration.zero) {
         _hasRecordedFirstFrame = true;
         PlayerMetricsService.instance.recordEvent(MetricsEvent.firstFrame);
+        MetricsCollectorService.instance.recordEvent(MetricsEvent.firstFrame);
         // 显示首帧时间覆盖层
         _showFirstFrameOverlay();
       }
@@ -553,8 +594,11 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
 
   @override
   void dispose() {
-    // 优化6: 结束性能监控会话
-    PlayerMetricsService.instance.endSession();
+    // 优化6: 结束性能监控会话，并持久化到数据库
+    final metrics = PlayerMetricsService.instance.endSession();
+    if (metrics != null) {
+      MetricsCollectorService.instance.onSessionEnd(metrics);
+    }
 
     // 保存播放进度
     _savePlaybackProgress();
@@ -937,7 +981,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
       // 自动重试一次
       _retryCount++;
       _logger.i('播放错误，自动重试 ($_retryCount/$_maxAutoRetry): $error');
-      _player.open(Media(widget.url));
+      final videoId = '${widget.title}_${widget.episodeIndex ?? 0}';
+      _openVideoWithCacheCheck(widget.url, videoId);
       return;
     }
 
@@ -975,7 +1020,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
             onPressed: () {
               Navigator.pop(ctx);
               _retryCount = 0;
-              _player.open(Media(widget.url));
+              final videoId = '${widget.title}_${widget.episodeIndex ?? 0}';
+              _openVideoWithCacheCheck(widget.url, videoId);
             },
             child: const Text('重试'),
           ),
@@ -1459,8 +1505,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   void _playEpisodeAtIndex(int index) {
     final newUrl = widget.episodeUrls![index];
     final newName = widget.episodeNames![index];
-    // 复用当前播放器，避免页面闪烁
-    _player.open(Media(newUrl));
+    // 缓存深度集成：切集时也检查缓存
+    final videoId = '${widget.title}_$index';
+    _openVideoWithCacheCheck(newUrl, videoId);
     setState(() {
       _currentEpisodeIndex = index;
       _currentEpisodeName = newName;
@@ -1474,6 +1521,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     final videoId = '${widget.title}_$index';
     PlayerMetricsService.instance.startSession(videoId);
     PlayerMetricsService.instance.recordEvent(MetricsEvent.playStart);
+    MetricsCollectorService.instance.recordEvent(MetricsEvent.playStart, videoId: videoId);
     _hasRecordedFirstFrame = false;
 
     // 保存旧集进度，检查新集进度

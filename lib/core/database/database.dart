@@ -81,12 +81,52 @@ class DownloadTasks extends Table {
   Set<Column> get primaryKey => {id};
 }
 
-@DriftDatabase(tables: [VideoSources, PlaybackProgresses, WatchHistories, Favorites, DownloadTasks])
+/// 性能指标事件表 — 原始埋点事件持久化
+@DataClassName('MetricsEventRecord')
+class MetricsEvents extends Table {
+  TextColumn get id => text()(); // UUID
+  TextColumn get sessionId => text()();
+  TextColumn get videoId => text()();
+  TextColumn get eventType => text()(); // MetricsEvent 枚举名
+  IntColumn get timestamp => integer()(); // 事件时间戳（毫秒）
+  TextColumn get payloadJson => text().withDefault(const Constant('{}'))(); // 附加数据 JSON
+  BoolColumn get uploaded => boolean().withDefault(const Constant(false))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// 性能指标会话表 — 播放会话汇总数据
+@DataClassName('MetricsSession')
+class MetricsSessions extends Table {
+  TextColumn get sessionId => text()();
+  TextColumn get videoId => text()();
+  IntColumn get firstFrameTimeMs => integer().withDefault(const Constant(0))();
+  IntColumn get bufferingCount => integer().withDefault(const Constant(0))();
+  IntColumn get bufferingTotalMs => integer().withDefault(const Constant(0))();
+  RealColumn get stutterRate => real().withDefault(const Constant(0.0))();
+  IntColumn get qualityChanges => integer().withDefault(const Constant(0))();
+  IntColumn get seekCount => integer().withDefault(const Constant(0))();
+  IntColumn get seekAvgMs => integer().withDefault(const Constant(0))();
+  IntColumn get errorCount => integer().withDefault(const Constant(0))();
+  IntColumn get cacheHits => integer().withDefault(const Constant(0))();
+  IntColumn get cacheMisses => integer().withDefault(const Constant(0))();
+  RealColumn get avgBandwidthKbps => real().withDefault(const Constant(0.0))();
+  RealColumn get peakBandwidthKbps => real().withDefault(const Constant(0.0))();
+  IntColumn get startTime => integer()(); // 会话开始时间戳
+  IntColumn get endTime => integer().nullable()(); // 会话结束时间戳
+  BoolColumn get uploaded => boolean().withDefault(const Constant(false))();
+
+  @override
+  Set<Column> get primaryKey => {sessionId};
+}
+
+@DriftDatabase(tables: [VideoSources, PlaybackProgresses, WatchHistories, Favorites, DownloadTasks, MetricsEvents, MetricsSessions])
 class AppDatabase extends _$AppDatabase {
   AppDatabase() : super(_openConnection());
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -107,6 +147,10 @@ class AppDatabase extends _$AppDatabase {
       }
       if (from < 6) {
         await m.createTable(downloadTasks);
+      }
+      if (from < 7) {
+        await m.createTable(metricsEvents);
+        await m.createTable(metricsSessions);
       }
     },
     onCreate: (Migrator m) async {
@@ -206,6 +250,58 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> deleteCompletedDownloads() =>
       (delete(downloadTasks)..where((t) => t.status.equals(2))).go();
+
+  // ===== 指标事件 CRUD =====
+
+  Future<void> insertMetricsEvent(MetricsEventsCompanion entry) =>
+      into(metricsEvents).insert(entry);
+
+  Future<List<MetricsEventRecord>> getUnuploadedEvents({int limit = 50}) =>
+      (select(metricsEvents)..where((t) => t.uploaded.equals(false))..limit(limit)).get();
+
+  Future<void> markEventsUploaded(List<String> ids) =>
+      (update(metricsEvents)..where((t) => t.id.isIn(ids)))
+          .write(const MetricsEventsCompanion(uploaded: Value(true)));
+
+  Future<void> deleteUploadedEvents() =>
+      (delete(metricsEvents)..where((t) => t.uploaded.equals(true))).go();
+
+  Future<void> deleteOldEvents({int olderThanDays = 7}) {
+    final cutoff = DateTime.now().subtract(Duration(days: olderThanDays)).millisecondsSinceEpoch;
+    return (delete(metricsEvents)..where((t) => t.timestamp.isSmallerThanValue(cutoff))).go();
+  }
+
+  // ===== 指标会话 CRUD =====
+
+  Future<void> insertMetricsSession(MetricsSessionsCompanion entry) =>
+      into(metricsSessions).insert(entry, mode: InsertMode.insertOrReplace);
+
+  Future<List<MetricsSession>> getUnuploadedSessions({int limit = 50}) =>
+      (select(metricsSessions)..where((t) => t.uploaded.equals(false))..limit(limit)).get();
+
+  Future<void> markSessionsUploaded(List<String> ids) =>
+      (update(metricsSessions)..where((t) => t.sessionId.isIn(ids)))
+          .write(const MetricsSessionsCompanion(uploaded: Value(true)));
+
+  Future<void> deleteUploadedSessions() =>
+      (delete(metricsSessions)..where((t) => t.uploaded.equals(true))).go();
+
+  Future<void> deleteOldSessions({int olderThanDays = 7}) {
+    final cutoff = DateTime.now().subtract(Duration(days: olderThanDays)).millisecondsSinceEpoch;
+    return (delete(metricsSessions)..where((t) => t.startTime.isSmallerThanValue(cutoff))).go();
+  }
+
+  /// 获取本地指标统计摘要
+  Future<Map<String, dynamic>> getMetricsSummary() async {
+    final events = await select(metricsEvents).get();
+    final sessions = await select(metricsSessions).get();
+    return {
+      'total_events': events.length,
+      'unuploaded_events': events.where((e) => !e.uploaded).length,
+      'total_sessions': sessions.length,
+      'unuploaded_sessions': sessions.where((s) => !s.uploaded).length,
+    };
+  }
 }
 
 LazyDatabase _openConnection() {

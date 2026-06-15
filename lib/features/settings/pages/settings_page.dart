@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 import '../../video/providers/video_providers.dart';
 import '../../video/models/video_models.dart';
 import '../../../core/services/theme_provider.dart';
+import '../../../core/services/privacy_manager_service.dart';
+import '../../../core/services/data_reporter_service.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -18,6 +20,39 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   static const _decodeModeLabels = ['自动', '硬件优先', '软件优先'];
   static const _themeModeLabels = ['跟随系统', '浅色模式', '深色模式'];
+
+  // 隐私偏好
+  bool _metricsEnabled = false;
+  bool _performanceDataEnabled = true;
+  bool _usageDataEnabled = true;
+  bool _wifiOnlyUpload = true;
+  Map<String, dynamic> _localDataSummary = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPrivacyPrefs();
+  }
+
+  Future<void> _loadPrivacyPrefs() async {
+    final prefs = PrivacyManagerService.instance.preferences;
+    setState(() {
+      _metricsEnabled = prefs.metricsEnabled;
+      _performanceDataEnabled = prefs.performanceDataEnabled;
+      _usageDataEnabled = prefs.usageDataEnabled;
+      _wifiOnlyUpload = prefs.wifiOnlyUpload;
+    });
+    _refreshDataSummary();
+  }
+
+  Future<void> _refreshDataSummary() async {
+    final summary = await DataReporterService.instance.getLocalDataSummary();
+    if (mounted) {
+      setState(() {
+        _localDataSummary = summary;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -69,6 +104,84 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             onTap: () => _showThemeModeDialog(),
           ),
           const Divider(),
+          // 隐私与数据
+          _SectionHeader(title: '隐私与数据'),
+          SwitchListTile(
+            secondary: Icon(
+              _metricsEnabled ? Icons.analytics : Icons.analytics_outlined,
+            ),
+            title: const Text('使用数据分享'),
+            subtitle: Text(_metricsEnabled ? '已开启 — 帮助改善应用体验' : '已关闭'),
+            value: _metricsEnabled,
+            onChanged: (value) async {
+              await PrivacyManagerService.instance.setMetricsEnabled(value);
+              setState(() => _metricsEnabled = value);
+            },
+          ),
+          if (_metricsEnabled) ...[
+            SwitchListTile(
+              secondary: const Icon(Icons.speed),
+              title: const Text('性能数据'),
+              subtitle: const Text('首屏时间、卡顿率、Seek延迟等'),
+              value: _performanceDataEnabled,
+              onChanged: (value) async {
+                await PrivacyManagerService.instance.setPerformanceDataEnabled(value);
+                setState(() => _performanceDataEnabled = value);
+              },
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.timeline),
+              title: const Text('使用习惯数据'),
+              subtitle: const Text('观看时长、操作频次等'),
+              value: _usageDataEnabled,
+              onChanged: (value) async {
+                await PrivacyManagerService.instance.setUsageDataEnabled(value);
+                setState(() => _usageDataEnabled = value);
+              },
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.wifi),
+              title: const Text('仅 WiFi 下上报'),
+              subtitle: const Text('移动网络下不上报数据'),
+              value: _wifiOnlyUpload,
+              onChanged: (value) async {
+                await PrivacyManagerService.instance.setWifiOnlyUpload(value);
+                setState(() => _wifiOnlyUpload = value);
+              },
+            ),
+          ],
+          ListTile(
+            leading: const Icon(Icons.storage),
+            title: const Text('本地数据'),
+            subtitle: Text(
+              '会话 ${_localDataSummary['total_sessions'] ?? 0} 条，'
+              '事件 ${_localDataSummary['total_events'] ?? 0} 条'
+              '${_localDataSummary['unuploaded_sessions'] != null && _localDataSummary['unuploaded_sessions'] > 0
+                  ? '（待上报 ${_localDataSummary['unuploaded_sessions']} 条）' : ''}',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => _showLocalDataDialog(),
+          ),
+          ListTile(
+            leading: const Icon(Icons.cloud_upload),
+            title: const Text('立即上报'),
+            subtitle: const Text('手动触发数据上报'),
+            onTap: () async {
+              final result = await DataReporterService.instance.uploadNow();
+              if (mounted) {
+                ScaffoldMessenger.of(context).clearSnackBars();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(_getUploadResultText(result)),
+                    duration: const Duration(seconds: 2),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+                _refreshDataSummary();
+              }
+            },
+          ),
+          const Divider(),
           ListTile(
             leading: const Icon(Icons.info),
             title: const Text('关于'),
@@ -99,6 +212,105 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           if (index == 1) context.go('/history');
           if (index == 2) context.go('/favorite');
         },
+      ),
+    );
+  }
+
+  String _getUploadResultText(UploadResult result) {
+    switch (result) {
+      case UploadResult.success:
+        return '数据上报成功';
+      case UploadResult.networkUnavailable:
+        return '网络不可用，稍后重试';
+      case UploadResult.privacyBlocked:
+        return '隐私设置已关闭上报';
+      case UploadResult.failed:
+        return '上报失败，稍后自动重试';
+      case UploadResult.noData:
+        return '暂无待上报数据';
+    }
+  }
+
+  /// 显示本地数据详情对话框
+  void _showLocalDataDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('本地数据'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('会话记录: ${_localDataSummary['total_sessions'] ?? 0} 条'),
+            Text('事件记录: ${_localDataSummary['total_events'] ?? 0} 条'),
+            const SizedBox(height: 8),
+            Text(
+              '待上报会话: ${_localDataSummary['unuploaded_sessions'] ?? 0} 条',
+              style: const TextStyle(color: Colors.orange),
+            ),
+            Text(
+              '待上报事件: ${_localDataSummary['unuploaded_events'] ?? 0} 条',
+              style: const TextStyle(color: Colors.orange),
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              '数据说明：\n'
+              '· 性能数据：首屏时间、卡顿率等\n'
+              '· 使用数据：观看时长、操作频次\n'
+              '· 不采集任何个人身份信息\n'
+              '· 数据仅用于改善应用体验',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              _showClearDataConfirmDialog();
+            },
+            child: const Text('清除本地数据', style: TextStyle(color: Colors.red)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 显示清除数据确认对话框
+  void _showClearDataConfirmDialog() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('确认清除'),
+        content: const Text('确定要清除所有本地指标数据吗？此操作不可恢复。'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () async {
+              await DataReporterService.instance.clearAllLocalData();
+              if (mounted) {
+                Navigator.pop(ctx);
+                _refreshDataSummary();
+                ScaffoldMessenger.of(context).clearSnackBars();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('本地数据已清除'),
+                    duration: Duration(seconds: 2),
+                    behavior: SnackBarBehavior.floating,
+                  ),
+                );
+              }
+            },
+            child: const Text('确认清除', style: TextStyle(color: Colors.red)),
+          ),
+        ],
       ),
     );
   }

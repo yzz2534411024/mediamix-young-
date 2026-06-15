@@ -9,6 +9,9 @@ import '../../../core/services/player_metrics_service.dart';
 import '../../../core/services/video_cache_service.dart';
 import '../../../core/services/preload_service.dart';
 import '../../../core/services/power_manager_service.dart';
+import '../../../core/services/privacy_manager_service.dart';
+import '../../../core/services/metrics_collector_service.dart';
+import '../../../core/services/data_reporter_service.dart';
 import '../../../core/network/network_engine.dart' hide CacheStats;
 import 'package:logger/logger.dart';
 
@@ -537,4 +540,26 @@ final playbackMetricsProvider = StreamProvider<PlaybackMetrics>((ref) {
 /// 功耗模式 Provider
 final powerModeProvider = StreamProvider<PowerMode>((ref) {
   return PowerManagerService.instance.onModeChanged;
+});
+
+// ===== 隐私与数据采集 Provider =====
+
+/// 隐私管理服务
+final privacyManagerProvider = Provider<PrivacyManagerService>((ref) {
+  return PrivacyManagerService.instance;
+});
+
+/// 指标采集服务
+final metricsCollectorProvider = Provider<MetricsCollectorService>((ref) {
+  return MetricsCollectorService.instance;
+});
+
+/// 数据上报服务
+final dataReporterProvider = Provider<DataReporterService>((ref) {
+  return DataReporterService.instance;
+});
+
+/// 隐私偏好 Provider（实时监听开关变化）
+final privacyPreferencesProvider = StateProvider<PrivacyPreferences>((ref) {
+  return PrivacyManagerService.instance.preferences;
 });
