@@ -22,37 +22,36 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
 
-  // 初始化优化服务
-  await _initializeServices();
+  // 初始化关键服务（单个失败不影响启动）
+  await _initCriticalServices();
 
   runApp(const ProviderScope(child: YoungApp()));
 }
 
-/// 初始化所有优化服务
-Future<void> _initializeServices() async {
-  // 初始化视频缓存服务
+/// 初始化关键服务 — 每个服务独立 try-catch，任一个失败都不阻塞启动
+Future<void> _initCriticalServices() async {
+  // 视频缓存服务
   try {
     await VideoCacheService.instance.initialize();
   } catch (e) {
-    // 缓存服务初始化失败不影响启动
-    debugPrint('视频缓存服务初始化失败: $e');
+    debugPrint('缓存服务初始化失败: $e');
   }
 
-  // 初始化功耗管理服务
+  // 功耗管理服务
   try {
     await PowerManagerService.instance.initialize();
   } catch (e) {
     debugPrint('功耗管理服务初始化失败: $e');
   }
 
-  // 初始化隐私管理服务
+  // 隐私管理服务
   try {
     await PrivacyManagerService.instance.initialize();
   } catch (e) {
     debugPrint('隐私管理服务初始化失败: $e');
   }
 
-  // 初始化指标采集和数据上报服务
+  // 指标采集和数据上报
   try {
     MetricsCollectorService.instance.initialize(AppDatabase.instance);
     await DataReporterService.instance.initialize(AppDatabase.instance);
@@ -60,15 +59,18 @@ Future<void> _initializeServices() async {
     debugPrint('指标服务初始化失败: $e');
   }
 
-  // 初始化代理配置和设备能力检测
+  // 代理配置和设备能力检测
   try {
     await ProxyConfigService.instance.initialize();
     await DeviceCapabilityService.instance.getCapabilityReport();
   } catch (e) {
     debugPrint('代理/设备检测初始化失败: $e');
   }
+}
 
-  // DNS 预解析：提前解析内置站点域名
+/// 异步预热任务 — 不阻塞启动，在 UI 渲染后执行
+void _warmupAsyncTasks() {
+  // DNS 预解析：后台异步执行，不阻塞UI
   try {
     final engine = NetworkEngine.instance;
     final builtinUrls =
@@ -76,7 +78,7 @@ Future<void> _initializeServices() async {
           final uri = Uri.parse(s.apiUrl);
           return '${uri.scheme}://${uri.host}';
         }).toSet().toList();
-    await engine.preResolveDns(builtinUrls);
+    engine.preResolveDns(builtinUrls);
   } catch (e) {
     debugPrint('DNS 预解析失败: $e');
   }
@@ -105,6 +107,7 @@ class _YoungAppState extends ConsumerState<YoungApp> {
           _hasCheckedConsent = true;
           WidgetsBinding.instance.addPostFrameCallback((_) {
             _checkPrivacyConsent();
+            _warmupAsyncTasks();
           });
         }
 

@@ -394,14 +394,13 @@ class NetworkEngine {
             for (final ans in answers) {
               final a = ans as Map<String, dynamic>;
               if (a['type'] == 1) {
-                // A 记录（IPv4）
                 return a['data'] as String?;
               }
             }
           }
         }
       } catch (_) {
-        // 逐个尝试，失败则试下一个
+        // DoH 不可用时静默失败，回退到系统 DNS
       }
     }
     return null;

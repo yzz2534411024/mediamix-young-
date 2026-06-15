@@ -110,18 +110,32 @@ class DeviceCapabilityService {
     return prefs.getBool(_detectedKey) ?? false;
   }
 
-  /// 探测设备能力
+  /// 探测设备能力（所有子方法都有独立 try-catch，确保不会整体崩溃）
   Future<DeviceCapabilityReport> _detectCapabilities() async {
-    final platform = Platform.operatingSystem;
-    final cpuArch = _detectCpuArch();
-    final totalRamMB = _estimateRamMB();
-    final cpuCores = Platform.numberOfProcessors;
+    String platform = 'unknown';
+    String cpuArch = 'unknown';
+    int totalRamMB = 2048;
+    int cpuCores = 2;
+
+    try { platform = Platform.operatingSystem; } catch (_) {}
+    try { cpuArch = _detectCpuArch(); } catch (_) {}
+    try { totalRamMB = _estimateRamMB(); } catch (_) {}
+    try { cpuCores = Platform.numberOfProcessors; } catch (_) {}
+
     final isLowEndDevice = totalRamMB < 2000 || cpuCores <= 2;
 
-    final codecCapabilities = _buildDefaultCodecCapabilities(
-      platform: platform,
-      isLowEnd: isLowEndDevice,
-    );
+    List<CodecCapability> codecCapabilities;
+    try {
+      codecCapabilities = _buildDefaultCodecCapabilities(
+        platform: platform,
+        isLowEnd: isLowEndDevice,
+      );
+    } catch (_) {
+      codecCapabilities = _buildDefaultCodecCapabilities(
+        platform: 'android',
+        isLowEnd: true,
+      );
+    }
 
     _logger.i('设备能力探测完成: $platform, $cpuArch, ${totalRamMB}MB RAM, '
         '${cpuCores}核, 低端设备=$isLowEndDevice');
