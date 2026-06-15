@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
+import '../network/proxy_config_service.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:uuid/uuid.dart';
 import '../database/database.dart';
@@ -27,7 +29,18 @@ final downloadServiceProvider = Provider<DownloadService>((ref) {
 
 class DownloadService {
   final Ref _ref;
-  final Dio _dio = Dio();
+  final Dio _dio = DownloadService._createDio();
+
+  static Dio _createDio() {
+    final dio = Dio();
+    (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
+      final client = HttpClient();
+      client.badCertificateCallback = (cert, host, port) => true;
+      try { ProxyConfigService.instance.configureHttpClient(client); } catch (_) {}
+      return client;
+    };
+    return dio;
+  }
   final Map<String, CancelToken> _cancelTokens = {};
 
   DownloadService(this._ref);

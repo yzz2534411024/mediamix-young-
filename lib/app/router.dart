@@ -34,10 +34,18 @@ final routerProvider = Provider<GoRouter>((ref) {
           final indexStr = state.uri.queryParameters['index'];
           final epNamesStr = state.uri.queryParameters['epNames'];
           final epUrlsStr = state.uri.queryParameters['epUrls'];
+          final qualityLabelsStr = state.uri.queryParameters['qualityLabels'];
+          final qualityUrlsStr = state.uri.queryParameters['qualityUrls'];
 
           final episodeIndex = indexStr != null ? int.tryParse(indexStr) : null;
           final episodeNames = epNamesStr?.split(',');
           final episodeUrls = epUrlsStr?.split(',');
+          final qualityLabels = qualityLabelsStr?.isNotEmpty == true
+              ? qualityLabelsStr!.split(',')
+              : null;
+          final qualityUrls = qualityUrlsStr?.isNotEmpty == true
+              ? qualityUrlsStr!.split(',')
+              : null;
 
           return PlayerPage(
             url: url,
@@ -45,6 +53,8 @@ final routerProvider = Provider<GoRouter>((ref) {
             episodeIndex: episodeIndex,
             episodeNames: episodeNames,
             episodeUrls: episodeUrls,
+            qualityLabels: qualityLabels,
+            qualityUrls: qualityUrls,
           );
         },
       ),

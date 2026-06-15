@@ -13,6 +13,9 @@ import 'core/services/data_reporter_service.dart';
 import 'core/database/database_provider.dart';
 import 'core/database/database.dart';
 import 'core/network/network_engine.dart';
+import 'core/network/proxy_config_service.dart';
+import 'core/services/device_capability_service.dart';
+import 'core/services/local_proxy_server.dart';
 import 'core/widgets/privacy_consent_dialog.dart';
 
 void main() async {
@@ -55,6 +58,14 @@ Future<void> _initializeServices() async {
     await DataReporterService.instance.initialize(AppDatabase.instance);
   } catch (e) {
     debugPrint('指标服务初始化失败: $e');
+  }
+
+  // 初始化代理配置和设备能力检测
+  try {
+    await ProxyConfigService.instance.initialize();
+    await DeviceCapabilityService.instance.getCapabilityReport();
+  } catch (e) {
+    debugPrint('代理/设备检测初始化失败: $e');
   }
 
   // DNS 预解析：提前解析内置站点域名
@@ -123,5 +134,11 @@ class _YoungAppState extends ConsumerState<YoungApp> {
     if (privacy.shouldShowConsentDialog && mounted) {
       await PrivacyConsentDialog.show(context);
     }
+  }
+
+  @override
+  void dispose() {
+    LocalProxyServer.instance.stop();
+    super.dispose();
   }
 }

@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:logger/logger.dart';
 import '../models/video_models.dart';
+import '../../../core/network/proxy_config_service.dart';
 
 /// CMS API 视频服务
 /// 支持采集站 API 格式：{apiUrl}?ac=detail&pg=1 获取影片列表
@@ -49,10 +50,13 @@ class VideoApiService {
       maxRedirects: 5,
     ));
 
-    // 允许自签名证书
+    // 允许自签名证书 + 代理配置
     (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
       final client = HttpClient();
       client.badCertificateCallback = (cert, host, port) => true;
+      try {
+        ProxyConfigService.instance.configureHttpClient(client);
+      } catch (_) {}
       return client;
     };
 

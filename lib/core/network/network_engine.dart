@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'proxy_config_service.dart';
 import 'package:logger/logger.dart';
 
 // ==================== 带宽估算器 ====================
@@ -248,13 +249,18 @@ class NetworkEngine {
       },
     ));
 
-    // 启用 HTTP/2 和连接池优化
+    // 启用 HTTP/2、连接池优化 和 代理支持
     (_dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
       final client = HttpClient();
       client.badCertificateCallback = (cert, host, port) => true;
-      // 连接池优化：每主机最大连接数8，空闲超时30秒
       client.maxConnectionsPerHost = 8;
       client.idleTimeout = const Duration(seconds: 30);
+
+      // 代理配置
+      try {
+        ProxyConfigService.instance.configureHttpClient(client);
+      } catch (_) {}
+
       return client;
     };
 
@@ -337,6 +343,14 @@ class NetworkEngine {
   }
 
   Future<void> _resolveHost(String host) async {
+    // 优先使用 DNS-over-HTTPS，失败时回退系统 DNS
+    final dohResult = await _resolveWithDoH(host);
+    if (dohResult != null) {
+      _dnsCache[host] = DateTime.now();
+      _logger.d('DoH解析成功: $host -> $dohResult');
+      return;
+    }
+
     try {
       final addresses = await InternetAddress.lookup(host);
       if (addresses.isNotEmpty) {
@@ -346,6 +360,51 @@ class NetworkEngine {
     } catch (e) {
       _logger.w('DNS 预解析失败: $host');
     }
+  }
+
+  /// 通过 DNS-over-HTTPS 解析域名，返回第一个 IPv4 地址
+  Future<String?> _resolveWithDoH(String host) async {
+    // 跳过 localhost / IP 地址
+    if (host == 'localhost' || host == '127.0.0.1' ||
+        RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(host)) {
+      return null;
+    }
+
+    final dohEndpoints = [
+      'https://dns.google/resolve?name=$host&type=A',
+      'https://cloudflare-dns.com/dns-query?name=$host&type=A',
+    ];
+
+    for (final endpoint in dohEndpoints) {
+      try {
+        final response = await _dio.get(
+          endpoint,
+          options: Options(
+            headers: {'Accept': 'application/dns-json'},
+            receiveTimeout: const Duration(seconds: 3),
+            sendTimeout: const Duration(seconds: 3),
+            connectTimeout: const Duration(seconds: 3),
+          ),
+        );
+
+        if (response.statusCode == 200 && response.data != null) {
+          final data = response.data as Map<String, dynamic>;
+          final answers = data['Answer'] as List<dynamic>?;
+          if (answers != null && answers.isNotEmpty) {
+            for (final ans in answers) {
+              final a = ans as Map<String, dynamic>;
+              if (a['type'] == 1) {
+                // A 记录（IPv4）
+                return a['data'] as String?;
+              }
+            }
+          }
+        }
+      } catch (_) {
+        // 逐个尝试，失败则试下一个
+      }
+    }
+    return null;
   }
 
   /// 并发请求 - 核心优化：多源同时加载

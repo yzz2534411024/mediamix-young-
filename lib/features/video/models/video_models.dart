@@ -30,7 +30,7 @@ class CmsApiSite {
     );
   }
 
-  /// 内置站点列表
+  /// 内置站点列表（2026-06 实测可用）
   static const defaultSites = [
     CmsApiSite(
       key: 'bfzy',
@@ -41,25 +41,85 @@ class CmsApiSite {
     CmsApiSite(
       key: 'lzzy',
       name: '量子资源',
-      apiUrl: 'https://cjhd.lziapi.com/api.php/provide/vod/',
+      apiUrl: 'https://cj.lziapi.com/api.php/provide/vod/',
       isBuiltIn: true,
     ),
     CmsApiSite(
       key: 'ffzy',
       name: '非凡资源',
-      apiUrl: 'https://cjhd.ffzyapi.com/api.php/provide/vod/',
-      isBuiltIn: true,
-    ),
-    CmsApiSite(
-      key: 'zyk1080',
-      name: '1080资源库',
-      apiUrl: 'http://api.1080zyku.com/inc/api.php/provide/vod/',
+      apiUrl: 'http://ffzy5.tv/api.php/provide/vod/',
       isBuiltIn: true,
     ),
     CmsApiSite(
       key: 'hnzy',
       name: '红牛资源',
-      apiUrl: 'http://hongniuzy2.com/api.php/provide/vod/',
+      apiUrl: 'https://hongniuzy2.com/api.php/provide/vod/',
+      isBuiltIn: true,
+    ),
+    CmsApiSite(
+      key: 'tyyszy',
+      name: '天涯资源',
+      apiUrl: 'https://tyyszy.com/api.php/provide/vod/',
+      isBuiltIn: true,
+    ),
+    CmsApiSite(
+      key: 'jszyapi',
+      name: '极速资源',
+      apiUrl: 'https://jszyapi.com/api.php/provide/vod/',
+      isBuiltIn: true,
+    ),
+    CmsApiSite(
+      key: 'zuidapi',
+      name: '最大资源',
+      apiUrl: 'https://api.zuidapi.com/api.php/provide/vod/',
+      isBuiltIn: true,
+    ),
+    CmsApiSite(
+      key: 'apibdzy',
+      name: '百度资源',
+      apiUrl: 'https://api.apibdzy.com/api.php/provide/vod/',
+      isBuiltIn: true,
+    ),
+    CmsApiSite(
+      key: 'apiwujin',
+      name: '无尽资源',
+      apiUrl: 'https://api.wujinapi.me/api.php/provide/vod/',
+      isBuiltIn: true,
+    ),
+    CmsApiSite(
+      key: 'rycjapi',
+      name: '如意资源',
+      apiUrl: 'https://cj.rycjapi.com/api.php/provide/vod/',
+      isBuiltIn: true,
+    ),
+    CmsApiSite(
+      key: 'apiYhzy',
+      name: '樱花资源',
+      apiUrl: 'https://m3u8.apiyhzy.com/api.php/provide/vod/',
+      isBuiltIn: true,
+    ),
+    CmsApiSite(
+      key: 'dbzy',
+      name: '豆瓣资源',
+      apiUrl: 'https://dbzy.tv/api.php/provide/vod/',
+      isBuiltIn: true,
+    ),
+    CmsApiSite(
+      key: 'mdzyapi',
+      name: '魔都资源',
+      apiUrl: 'https://www.mdzyapi.com/api.php/provide/vod/',
+      isBuiltIn: true,
+    ),
+    CmsApiSite(
+      key: 'xiaomaomi',
+      name: '小猫咪资源',
+      apiUrl: 'https://zy.xiaomaomi.cc/api.php/provide/vod/',
+      isBuiltIn: true,
+    ),
+    CmsApiSite(
+      key: 'dyttzyapi',
+      name: '电影天堂',
+      apiUrl: 'http://caiji.dyttzyapi.com/api.php/provide/vod/',
       isBuiltIn: true,
     ),
   ];

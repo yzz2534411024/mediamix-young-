@@ -2,16 +2,21 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:media_kit/media_kit.dart';
+import 'package:media_kit/media_kit.dart'
+    hide SubtitleTrack; // 与自定义 SubtitleTrack 冲突，使用自定义版本
 import 'package:media_kit_video/media_kit_video.dart';
 import '../../../core/database/database.dart';
 import '../../../core/database/database_provider.dart';
 import '../../../core/services/player_metrics_service.dart';
 import '../../../core/services/power_manager_service.dart';
 import '../../../core/services/video_cache_service.dart';
+import '../../../core/services/device_capability_service.dart';
 import '../../../core/services/metrics_collector_service.dart';
 import '../../../core/network/network_engine.dart';
 import '../providers/video_providers.dart';
+import '../core/player_core.dart';
+import '../../../core/services/local_proxy_server.dart';
+import '../services/subtitle_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
 
@@ -41,272 +46,6 @@ enum AspectMode {
 
 /// 功耗模式使用 PowerMode（来自 power_manager_service.dart）
 
-// ============================================================================
-// 缓冲区管理器 — 对应优化文档第2章
-// ============================================================================
-/// 缓冲区水位线配置
-class _BufferWaterLines {
-  final Duration low;   // 低水位线
-  final Duration high;  // 高水位线
-  final Duration max;   // 最大水位线
-
-  const _BufferWaterLines({
-    required this.low,
-    required this.high,
-    required this.max,
-  });
-
-  /// WiFi 水位线：3s/20s/60s
-  static const wifi = _BufferWaterLines(
-    low: Duration(seconds: 3),
-    high: Duration(seconds: 20),
-    max: Duration(seconds: 60),
-  );
-
-  /// 4G 水位线：5s/15s/30s
-  static const mobile4G = _BufferWaterLines(
-    low: Duration(seconds: 5),
-    high: Duration(seconds: 15),
-    max: Duration(seconds: 30),
-  );
-
-  /// 弱网水位线：8s/10s/15s
-  static const weak = _BufferWaterLines(
-    low: Duration(seconds: 8),
-    high: Duration(seconds: 10),
-    max: Duration(seconds: 15),
-  );
-}
-
-/// 缓冲区管理器 — 监控缓冲状态，动态调整水位线
-class _BufferManager {
-  final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
-
-  /// 当前水位线配置
-  _BufferWaterLines _waterLines = _BufferWaterLines.wifi;
-
-  /// 当前缓冲时长
-  Duration _currentBuffer = Duration.zero;
-
-  /// 是否处于低缓冲状态
-  bool _isLowBuffer = false;
-
-  /// 缓冲状态变化回调
-  void Function(bool isLow)? onBufferStateChanged;
-
-  /// 网络条件到水位线的映射
-  static _BufferWaterLines _waterLinesForCondition(NetworkCondition condition) {
-    switch (condition) {
-      case NetworkCondition.wifi:
-        return _BufferWaterLines.wifi;
-      case NetworkCondition.lte:
-        return _BufferWaterLines.mobile4G;
-      case NetworkCondition.threeG:
-        return _BufferWaterLines.weak;
-      case NetworkCondition.weak:
-        return _BufferWaterLines.weak;
-      case NetworkCondition.offline:
-        return _BufferWaterLines.weak;
-    }
-  }
-
-  _BufferManager({this.onBufferStateChanged});
-
-  /// 当前水位线配置
-  _BufferWaterLines get waterLines => _waterLines;
-
-  /// 当前缓冲时长
-  Duration get currentBuffer => _currentBuffer;
-
-  /// 是否处于低缓冲状态
-  bool get isLowBuffer => _isLowBuffer;
-
-  /// 根据网络条件更新水位线
-  void updateNetworkCondition(NetworkCondition condition) {
-    _waterLines = _waterLinesForCondition(condition);
-    _logger.d('缓冲水位线更新: ${condition.name}, '
-        '低=${_waterLines.low.inSeconds}s, '
-        '高=${_waterLines.high.inSeconds}s, '
-        '最大=${_waterLines.max.inSeconds}s');
-    // 重新检查当前缓冲状态
-    _checkBufferState();
-  }
-
-  /// 更新缓冲时长（由播放器 stream 驱动）
-  void updateBuffer(Duration buffer) {
-    _currentBuffer = buffer;
-    _checkBufferState();
-  }
-
-  /// 检查缓冲状态
-  void _checkBufferState() {
-    final wasLow = _isLowBuffer;
-    _isLowBuffer = _currentBuffer < _waterLines.low;
-
-    if (wasLow != _isLowBuffer) {
-      onBufferStateChanged?.call(_isLowBuffer);
-      if (_isLowBuffer) {
-        _logger.w('缓冲低于低水位线: ${_currentBuffer.inSeconds}s < ${_waterLines.low.inSeconds}s');
-      } else {
-        _logger.d('缓冲恢复正常: ${_currentBuffer.inSeconds}s');
-      }
-    }
-  }
-
-  /// 获取缓冲百分比（0.0 ~ 1.0）
-  double get bufferPercent {
-    if (_waterLines.max.inMilliseconds <= 0) return 0.0;
-    return (_currentBuffer.inMilliseconds / _waterLines.max.inMilliseconds).clamp(0.0, 1.0);
-  }
-}
-
-// ============================================================================
-// ABR 自适应码率控制器 — 对应优化文档第3章
-// ============================================================================
-/// ABR 自适应码率控制器
-/// 由于当前应用没有多码率流，实现为网络质量指示器 + 画质偏好管理
-class _ABRController {
-  final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
-
-  /// 当前带宽估计（kbps）
-  double _currentBandwidthKbps = 0;
-
-  /// 当前缓冲时长
-  Duration _currentBuffer = Duration.zero;
-
-  /// 上次码率切换时间
-  DateTime? _lastSwitchTime;
-
-  /// 连续高带宽持续时间
-  DateTime? _highBandwidthStart;
-
-  /// 升级延迟：5秒连续充足带宽
-  static const Duration _upgradeDelay = Duration(seconds: 5);
-
-  /// 最小切换间隔：10秒
-  static const Duration _minSwitchInterval = Duration(seconds: 10);
-
-  /// 码率降级缓冲阈值
-  static const Duration _downgradeBufferThreshold = Duration(seconds: 5);
-
-  /// 码率升级缓冲阈值
-  static const Duration _upgradeBufferThreshold = Duration(seconds: 30);
-
-  /// 当前建议的画质等级
-  _QualityLevel _currentQuality = _QualityLevel.medium;
-
-  /// 画质变化回调
-  void Function(_QualityLevel level)? onQualityChanged;
-
-  _ABRController({this.onQualityChanged});
-
-  /// 当前画质等级
-  _QualityLevel get currentQuality => _currentQuality;
-
-  /// 更新带宽估计
-  void updateBandwidth(double kbps) {
-    _currentBandwidthKbps = kbps;
-    _evaluate();
-  }
-
-  /// 更新缓冲时长
-  void updateBuffer(Duration buffer) {
-    _currentBuffer = buffer;
-    _evaluate();
-  }
-
-  /// 评估是否需要切换画质
-  void _evaluate() {
-    final now = DateTime.now();
-
-    // 检查最小切换间隔
-    if (_lastSwitchTime != null &&
-        now.difference(_lastSwitchTime!) < _minSwitchInterval) {
-      return;
-    }
-
-    // 降级逻辑：缓冲 < 5s，立即降级
-    if (_currentBuffer < _downgradeBufferThreshold && _currentQuality != _QualityLevel.low) {
-      _switchQuality(_QualityLevel.low, '缓冲不足，降级画质');
-      return;
-    }
-
-    // 升级逻辑：缓冲 > 30s 且带宽充足
-    if (_currentBuffer > _upgradeBufferThreshold) {
-      final targetQuality = _qualityForBandwidth(_currentBandwidthKbps);
-
-      if (targetQuality.index > _currentQuality.index) {
-        // 检查连续高带宽持续时间
-        if (_highBandwidthStart == null) {
-          _highBandwidthStart = now;
-        } else if (now.difference(_highBandwidthStart!) >= _upgradeDelay) {
-          _switchQuality(targetQuality, '带宽充足，升级画质');
-        }
-      } else {
-        _highBandwidthStart = null;
-      }
-    } else {
-      _highBandwidthStart = null;
-    }
-  }
-
-  /// 根据带宽推荐画质
-  _QualityLevel _qualityForBandwidth(double kbps) {
-    if (kbps <= 0) return _QualityLevel.low;
-    if (kbps < 800) return _QualityLevel.low;    // < 800kbps: 流畅
-    if (kbps < 2500) return _QualityLevel.medium; // 800-2500kbps: 标清
-    if (kbps < 5000) return _QualityLevel.high;   // 2500-5000kbps: 高清
-    return _QualityLevel.ultra;                    // > 5000kbps: 超清
-  }
-
-  /// 切换画质
-  void _switchQuality(_QualityLevel newQuality, String reason) {
-    if (newQuality == _currentQuality) return;
-
-    _logger.i('ABR 画质切换: ${_currentQuality.name} -> ${newQuality.name}, 原因: $reason');
-    _currentQuality = newQuality;
-    _lastSwitchTime = DateTime.now();
-    _highBandwidthStart = null;
-    onQualityChanged?.call(newQuality);
-  }
-
-  /// 获取网络质量描述
-  String get networkQualityDescription {
-    if (_currentBandwidthKbps <= 0) return '未知';
-    if (_currentBandwidthKbps < 800) return '弱网';
-    if (_currentBandwidthKbps < 2500) return '一般';
-    if (_currentBandwidthKbps < 5000) return '良好';
-    return '优秀';
-  }
-
-  /// 保存画质偏好到 SharedPreferences
-  Future<void> saveQualityPreference(_QualityLevel level) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('preferred_quality', level.name);
-  }
-
-  /// 加载画质偏好
-  Future<_QualityLevel> loadQualityPreference() async {
-    final prefs = await SharedPreferences.getInstance();
-    final name = prefs.getString('preferred_quality');
-    if (name == null) return _QualityLevel.medium;
-    return _QualityLevel.values.firstWhere(
-      (e) => e.name == name,
-      orElse: () => _QualityLevel.medium,
-    );
-  }
-}
-
-/// 画质等级
-enum _QualityLevel {
-  low('流畅'),
-  medium('标清'),
-  high('高清'),
-  ultra('超清');
-
-  final String label;
-  const _QualityLevel(this.label);
-}
 
 class PlayerPage extends ConsumerStatefulWidget {
   final String url;
@@ -314,6 +53,9 @@ class PlayerPage extends ConsumerStatefulWidget {
   final int? episodeIndex;
   final List<String>? episodeNames;
   final List<String>? episodeUrls;
+  final List<String>? qualityLabels;
+  final List<String>? qualityUrls;
+  final List<String>? subtitleUrls;
 
   const PlayerPage({
     super.key,
@@ -322,6 +64,9 @@ class PlayerPage extends ConsumerStatefulWidget {
     this.episodeIndex,
     this.episodeNames,
     this.episodeUrls,
+    this.qualityLabels,
+    this.qualityUrls,
+    this.subtitleUrls,
   });
 
   @override
@@ -345,6 +90,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   double _playbackSpeed = 1.0;
   // 优化：增加0.25x步进
   final List<double> _speedOptions = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0];
+
+  // 快进间隔（秒），可长按快进按钮切换
+  int _skipInterval = 10;
+  final List<int> _skipIntervals = [5, 10, 30, 60];
 
   // 播放模式
   PlayMode _playMode = PlayMode.sequential;
@@ -372,14 +121,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   int _currentEpisodeIndex = 0;
   String _currentEpisodeName = '';
 
+  // 清晰度选项（多播放源）
+  int _currentQualityIndex = 0;
+  List<String> _qualityLabels = [];
+  List<String> _qualityUrls = [];
+  bool get _hasQualityOptions => _qualityUrls.length > 1;
+
+  // 字幕
+  final SubtitleService _subtitleService = SubtitleService();
+  List<SubtitleTrack> _subtitleTracks = [];
+  bool _showSubtitles = true;
+  int _currentSubtitleTrack = 0;
+
   // ========== 优化1: 硬解码配置 ==========
   bool _hardwareDecodingEnabled = true;
 
   // ========== 优化2: 缓冲区管理 ==========
-  final _BufferManager _bufferManager = _BufferManager();
+  final BufferManager _bufferManager = BufferManager();
 
   // ========== 优化3: ABR 自适应码率 ==========
-  final _ABRController _abrController = _ABRController();
+  final ABRController _abrController = ABRController();
 
   // ========== 优化4: Seek优化 ==========
   bool _isSeeking = false;
@@ -390,6 +151,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   Duration _lastVideoPosition = Duration.zero;
   DateTime _lastPositionUpdateTime = DateTime.now();
   Timer? _avSyncCheckTimer;
+  int _avSyncCorrectionCount = 0;
+  DateTime? _lastAVSyncCorrection;
 
   // ========== 优化6: 播放器性能监控 ==========
   bool _hasRecordedFirstFrame = false;
@@ -416,10 +179,23 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   double _bufferPercent = 0.0;
   String _networkSpeedText = '';
 
-  // ========== 优化12: 错误处理增强 ==========
+  // ========== 优化12: 错误处理 + 弱网自动重连 ==========
   int _retryCount = 0;
   static const int _maxAutoRetry = 1;
+  // 降级策略：记录已尝试的清晰度索引，失败后自动切换
+  final Set<int> _triedQualityIndices = {};
   String? _lastError;
+  /// 是否因网络断开而等待恢复
+  bool _isWaitingForNetwork = false;
+  /// 断网前的播放位置，用于恢复后续播
+  Duration _lastPlaybackPosition = Duration.zero;
+  /// 自动重连定时器（指数退避）
+  Timer? _reconnectTimer;
+  /// 重连尝试次数
+  int _reconnectAttempt = 0;
+  static const int _maxReconnectAttempts = 10;
+  /// 网络恢复监听
+  StreamSubscription? _networkRecoverySubscription;
 
   // ========== 流订阅管理 ==========
   StreamSubscription? _bufferSubscription;
@@ -431,7 +207,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   /// 是否使用了本地缓存
   bool _isUsingCache = false;
 
-  /// 解析视频 URL — 优先使用本地缓存
+  /// 解析视频 URL — 优先使用本地缓存，其次走本地代理边播边缓存
   Future<String> _resolveVideoUrl(String url, String videoId) async {
     try {
       // 检查完整缓存（L3 磁盘缓存）
@@ -447,8 +223,14 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
       PlayerMetricsService.instance.recordEvent(MetricsEvent.cacheMiss);
       MetricsCollectorService.instance.recordEvent(MetricsEvent.cacheMiss);
       _isUsingCache = false;
+
+      // 启动本地代理，走边播边缓存通道
+      await LocalProxyServer.instance.start();
+      final proxyUrl = LocalProxyServer.instance.proxyUrl(url, videoId);
+      _logger.i('通过本地代理播放: $videoId → 127.0.0.1:${LocalProxyServer.instance.port}');
+      return proxyUrl;
     } catch (e) {
-      _logger.w('缓存查询失败，使用网络URL: $e');
+      _logger.w('缓存/代理查询失败，使用网络URL: $e');
       _isUsingCache = false;
     }
     return url;
@@ -492,6 +274,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     _player.setRate(_playbackSpeed);
     _currentEpisodeIndex = widget.episodeIndex ?? 0;
     _currentEpisodeName = widget.title;
+    _qualityLabels = widget.qualityLabels ?? [];
+    _qualityUrls = widget.qualityUrls ?? [];
+    _currentQualityIndex = 0;
 
     // 监听播放完成事件
     _completedSubscription = _player.stream.completed.listen((completed) {
@@ -514,6 +299,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
         MetricsCollectorService.instance.recordEvent(MetricsEvent.firstFrame);
         // 显示首帧时间覆盖层
         _showFirstFrameOverlay();
+        // 加载字幕
+        _loadSubtitles();
       }
 
       // 优化7: 预加载 — 播放到80%时触发下一集预加载
@@ -580,6 +367,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
       _detectPowerMode();
       // 初始化网络条件
       _bufferManager.updateNetworkCondition(NetworkEngine.instance.currentCondition);
+      _loadSkipInterval();
     });
 
     // 每10秒自动保存播放进度
@@ -588,7 +376,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     });
 
     // 优化5: 定期检查音视频同步
-    _avSyncCheckTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+    _avSyncCheckTimer = Timer.periodic(const Duration(seconds: 2), (_) {
       _checkAVSync();
     });
   }
@@ -610,6 +398,8 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     _avSyncCheckTimer?.cancel();
     _completedSubscription?.cancel();
     _positionSubscription?.cancel();
+    _reconnectTimer?.cancel();
+    _networkRecoverySubscription?.cancel();
     _bufferSubscription?.cancel();
     _errorSubscription?.cancel();
     _playingSubscription?.cancel();
@@ -643,19 +433,37 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   // ========== 优化1: 硬解码配置 ==========
 
   /// 配置硬件解码
-  /// media_kit 基于 libmpv，硬件解码默认启用
-  /// 此方法用于确认配置并记录日志
-  void _configureHardwareDecoding() {
+  /// 配置硬件解码 — 异步探测设备能力，决定解码策略
+  void _configureHardwareDecoding() async {
     try {
-      // media_kit 的 PlayerConfiguration 中硬件解码默认启用
-      // 如果需要手动配置，可以通过 platform 属性设置
-      // 当前版本已默认使用硬件解码
-      _hardwareDecodingEnabled = true;
-      _logger.i('硬件解码已启用');
+      final report = await DeviceCapabilityService.instance.getCapabilityReport();
+      _hardwareDecodingEnabled = report.recommendHardwareDecoding;
+
+      if (report.isLowEndDevice) {
+        _logger.i('低端设备(${report.totalRamMB}MB RAM)，建议软解或降低分辨率');
+        // 低端设备限制分辨率和帧率
+        _abrController.updateBandwidth(500); // 初始带宽偏低，引导ABR选低画质
+      } else {
+        _logger.i('硬件解码已启用: ${report.platform}, ${report.cpuArch}, '
+            '${report.totalRamMB}MB RAM, ${report.cpuCores}核');
+      }
     } catch (e) {
-      _logger.w('硬件解码配置失败，将使用软件解码: $e');
-      _hardwareDecodingEnabled = false;
+      _logger.w('设备能力探测失败，使用默认硬解码: $e');
+      _hardwareDecodingEnabled = true;
     }
+  }
+
+  /// 处理播放器硬解码失败的降级
+  void _onHardwareDecodeFailure(String error) {
+    if (!_hardwareDecodingEnabled) return;
+    _logger.w('硬解码失败，降级至软解: $error');
+    _hardwareDecodingEnabled = false;
+    // 重新打开当前视频（media_kit 会在下次创建 player 时调整）
+    _player.stop();
+    Future.delayed(const Duration(milliseconds: 300), () {
+      final videoId = '${widget.title}_${widget.episodeIndex ?? 0}';
+      _openVideoWithCacheCheck(widget.url, videoId);
+    });
   }
 
   // ========== 优化2: 缓冲区管理回调 ==========
@@ -694,7 +502,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   // ========== 优化3: ABR 自适应码率回调 ==========
 
   /// 画质变化回调
-  void _onQualityChanged(_QualityLevel level) {
+  void _onQualityChanged(QualityLevel level) {
     _logger.i('ABR 建议画质: ${level.label}');
     // 保存偏好
     _abrController.saveQualityPreference(level);
@@ -745,23 +553,53 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     final timeSinceLastUpdate = now.difference(_lastPositionUpdateTime);
 
     // 如果位置更新停滞，可能存在同步问题
-    if (timeSinceLastUpdate.inMilliseconds > 500 && _player.state.playing) {
+    if (timeSinceLastUpdate.inMilliseconds > 120) {
       final expectedPosition = _lastVideoPosition + timeSinceLastUpdate;
       final actualPosition = _player.state.position;
-      final drift = (expectedPosition - actualPosition).abs();
+      final drift = expectedPosition - actualPosition;
+      final driftMs = drift.abs().inMilliseconds;
 
-      if (drift.inMilliseconds > 200) {
-        _logger.w('音视频同步偏移: ${drift.inMilliseconds}ms');
-        PlayerMetricsService.instance.recordEvent(
-          MetricsEvent.playError,
-          avSyncOffsetMs: drift.inMilliseconds,
-        );
-      }
+      // 估算帧数偏离（假设30fps，每帧约33ms）
+      final estimatedFramesBehind = driftMs ~/ 33;
 
-      // 偏移超过 500ms 自动修正
-      if (drift.inMilliseconds > 500) {
-        _logger.w('音视频偏移过大(${drift.inMilliseconds}ms)，自动修正');
-        _player.seek(actualPosition);
+      if (driftMs < 50) return; // 在可接受范围内（约1.5帧）
+
+      _logger.d('音视频偏移: ${drift.inMilliseconds}ms (~${estimatedFramesBehind}帧)');
+      PlayerMetricsService.instance.recordEvent(
+        MetricsEvent.playError,
+        avSyncOffsetMs: driftMs,
+      );
+
+      // 分级纠正：以音频时钟为基准，视频追音频
+      if (driftMs > 2000) {
+        // 严重偏离（>2s）：跳帧追赶
+        _logger.w('视频严重偏离(${driftMs}ms / ~${estimatedFramesBehind}帧)，跳帧纠正');
+        _player.seek(drift.isNegative ? expectedPosition : actualPosition);
+        _avSyncCorrectionCount++;
+        _lastAVSyncCorrection = now;
+      } else if (driftMs > 500) {
+        // 中度偏离（500ms~2s）：Seek 纠正
+        _logger.w('音视频偏移过大(${driftMs}ms)，Seek纠正');
+        _player.seek(expectedPosition);
+        _avSyncCorrectionCount++;
+        _lastAVSyncCorrection = now;
+      } else if (estimatedFramesBehind > 5) {
+        // 帧堆积>5帧（~165ms+）：跳帧到当前位置，避免逐帧追赶延迟
+        _logger.w('帧堆积${estimatedFramesBehind}帧(${driftMs}ms)，跳帧到当前');
+        _player.seek(expectedPosition);
+        _avSyncCorrectionCount++;
+        _lastAVSyncCorrection = now;
+      } else {
+        // 轻微偏离（1.5~5帧）：微调速率拉回同步
+        final correctionRate = drift.isNegative
+            ? _playbackSpeed * 1.05
+            : _playbackSpeed * 0.95;
+        _player.setRate(correctionRate);
+        Future.delayed(const Duration(milliseconds: 600), () {
+          if (_player.state.playing) {
+            _player.setRate(_playbackSpeed);
+          }
+        });
       }
     }
   }
@@ -974,9 +812,29 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   /// 处理播放错误
   void _handlePlaybackError(String error) {
     _lastError = error;
+    _lastPlaybackPosition = _player.state.position;
 
+    // 判断是否为硬解码失败
+    if (_isCodecError(error) && _hardwareDecodingEnabled) {
+      _logger.w('检测到硬解码失败，降级软解');
+      _onHardwareDecodeFailure(error);
+      return;
+    }
+
+    // 判断是否为网络相关错误
+    final isNetworkError = _isErrorNetworkRelated(error);
+    final networkOffline = NetworkEngine.instance.currentCondition == NetworkCondition.offline ||
+        NetworkEngine.instance.currentCondition == NetworkCondition.weak;
+
+    if (isNetworkError || networkOffline) {
+      _logger.w('网络原因导致播放中断，等待网络恢复后自动重连');
+      _isWaitingForNetwork = true;
+      _startNetworkRecoveryMonitoring();
+      return;
+    }
+
+    // 非网络错误：快速重试一次（同URL）
     if (_retryCount < _maxAutoRetry) {
-      // 自动重试一次
       _retryCount++;
       _logger.i('播放错误，自动重试 ($_retryCount/$_maxAutoRetry): $error');
       final videoId = '${widget.title}_${widget.episodeIndex ?? 0}';
@@ -984,20 +842,158 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
       return;
     }
 
-    // 重试失败，显示错误对话框
+    // 降级策略：同URL重试失败后，尝试其他清晰度源
+    if (_hasQualityOptions && !_isWaitingForNetwork) {
+      _triedQualityIndices.add(_currentQualityIndex);
+      final nextIndex = _findNextUntriedQuality();
+      if (nextIndex >= 0) {
+        _logger.i('降级切换清晰度: ${_qualityLabels[_currentQualityIndex]} → ${_qualityLabels[nextIndex]}');
+        _retryCount = 0; // 重置重试计数，给新源一次重试机会
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('自动切换清晰度: ${_qualityLabels[nextIndex]}'),
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        _switchQuality(nextIndex);
+        return;
+      }
+    }
+
+    // 所有源都失败，显示错误对话框
     if (mounted) {
       _showErrorDialog(error);
     }
   }
 
+  /// 判断错误是否与网络相关
+  bool _isErrorNetworkRelated(String error) {
+    final lower = error.toLowerCase();
+    return lower.contains('network') ||
+        lower.contains('connection') ||
+        lower.contains('timeout') ||
+        lower.contains('dns') ||
+        lower.contains('unreachable') ||
+        lower.contains('refused') ||
+        lower.contains('socket') ||
+        lower.contains('host') ||
+        lower.contains('econnreset') ||
+        lower.contains('econnrefused') ||
+        lower.contains('etimedout') ||
+        lower.contains('enotfound');
+  }
+
+  /// 判断错误是否为编解码相关
+  bool _isCodecError(String error) {
+    final lower = error.toLowerCase();
+    return lower.contains('codec') ||
+        lower.contains('decoder') ||
+        lower.contains('mediacodec') ||
+        lower.contains('unsupported') ||
+        lower.contains('format') ||
+        lower.contains('avc') ||
+        lower.contains('hevc') ||
+        lower.contains('vp9') ||
+        lower.contains('av1') ||
+        lower.contains('hwdec') ||
+        lower.contains('hardware') ||
+        lower.contains('software');
+  }
+
+  /// 找到下一个未尝试的清晰度索引，-1 表示全部已尝试
+  int _findNextUntriedQuality() {
+    for (int i = 0; i < _qualityUrls.length; i++) {
+      if (!_triedQualityIndices.contains(i)) return i;
+    }
+    return -1;
+  }
+
+  /// 启动网络恢复监听
+  void _startNetworkRecoveryMonitoring() {
+    _networkRecoverySubscription?.cancel();
+    _reconnectTimer?.cancel();
+    _reconnectAttempt = 0;
+
+    // 监听网络条件恢复
+    _networkRecoverySubscription = NetworkEngine.instance.onConditionChanged
+        .listen((condition) {
+      if (_isWaitingForNetwork &&
+          condition != NetworkCondition.offline &&
+          condition != NetworkCondition.weak) {
+        _logger.i('网络已恢复(${condition.name})，自动重连');
+        _attemptReconnect();
+      }
+    });
+
+    // 同时启动指数退避探测定时器（防止流事件丢失）
+    _scheduleReconnectProbe();
+  }
+
+  /// 指数退避探测：在网络未恢复前周期性尝试
+  void _scheduleReconnectProbe() {
+    if (!_isWaitingForNetwork) return;
+    if (_reconnectAttempt >= _maxReconnectAttempts) {
+      _logger.w('已达最大重连次数，停止自动重连');
+      _isWaitingForNetwork = false;
+      if (mounted) {
+        _showErrorDialog('网络连接失败，请检查网络后手动重试');
+      }
+      return;
+    }
+
+    final delay = Duration(seconds: 1 << _reconnectAttempt.clamp(0, 5));
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(delay, () {
+      if (!_isWaitingForNetwork) return;
+      final condition = NetworkEngine.instance.currentCondition;
+      if (condition != NetworkCondition.offline && condition != NetworkCondition.weak) {
+        _logger.i('探测到网络恢复，开始重连');
+        _attemptReconnect();
+      } else {
+        _logger.d('网络未恢复，${delay.inSeconds}s 后再次探测');
+        _reconnectAttempt++;
+        _scheduleReconnectProbe();
+      }
+    });
+  }
+
+  /// 执行重连：从断点续播
+  void _attemptReconnect() {
+    _networkRecoverySubscription?.cancel();
+    _reconnectTimer?.cancel();
+    _isWaitingForNetwork = false;
+
+    // 获取当前网络缓冲位置（media_kit 内部已缓冲的位置）
+    final bufferedPosition = _lastPlaybackPosition;
+
+    _logger.i('自动重连 — 断点位置: ${bufferedPosition.inSeconds}s');
+    final videoId = '${widget.title}_${widget.episodeIndex ?? 0}';
+    _retryCount = 0; // 重置重试计数
+    _openVideoWithCacheCheck(widget.url, videoId);
+
+    // 短暂延迟后恢复到断点位置
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (_player.state.playing || _player.state.position > Duration.zero) {
+        _player.seek(bufferedPosition);
+        _logger.i('已恢复到断点位置: ${bufferedPosition.inSeconds}s');
+        _reconnectAttempt = 0;
+      }
+    });
+  }
+
   /// 显示错误对话框
   void _showErrorDialog(String error) {
+    final triedInfo = _triedQualityIndices.isNotEmpty
+        ? '\n已尝试${_triedQualityIndices.length + 1}个清晰度，均失败'
+        : '';
     showDialog(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         title: const Text('播放错误'),
-        content: Text('播放遇到问题：${error.length > 100 ? error.substring(0, 100) + '...' : error}'),
+        content: Text('播放遇到问题${triedInfo}：${error.length > 100 ? error.substring(0, 100) + '...' : error}'),
         actions: [
           TextButton(
             onPressed: () {
@@ -1012,12 +1008,27 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
                 Navigator.pop(ctx);
                 _playNextEpisode();
               },
-              child: const Text('切换源'),
+              child: const Text('下一集'),
+            ),
+          // 有未尝试的清晰度时，提供手动切换按钮
+          if (_hasQualityOptions && _findNextUntriedQuality() >= 0)
+            TextButton(
+              onPressed: () {
+                final next = _findNextUntriedQuality();
+                Navigator.pop(ctx);
+                _retryCount = 0;
+                _switchQuality(next);
+              },
+              child: Text('切换${_qualityLabels[_findNextUntriedQuality()]}'),
             ),
           TextButton(
             onPressed: () {
               Navigator.pop(ctx);
+              _isWaitingForNetwork = false;
+              _networkRecoverySubscription?.cancel();
+              _reconnectTimer?.cancel();
               _retryCount = 0;
+              _triedQualityIndices.clear();
               final videoId = '${widget.title}_${widget.episodeIndex ?? 0}';
               _openVideoWithCacheCheck(widget.url, videoId);
             },
@@ -1150,13 +1161,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     }
   }
 
-  /// 双击：播放/暂停
-  void _onDoubleTap() {
+  /// 双击：左半屏后退10s，右半屏前进10s，中间播放/暂停
+  void _onDoubleTapDown(TapDownDetails details) {
     if (_isLocked) return;
-    if (_player.state.playing) {
-      _player.pause();
+    final width = MediaQuery.of(context).size.width;
+    final dx = details.globalPosition.dx;
+    if (dx < width * 0.3) {
+      // 左半屏：后退10s
+      final pos = _player.state.position;
+      _fastSeek(pos - const Duration(seconds: 10));
+    } else if (dx > width * 0.7) {
+      // 右半屏：前进10s
+      final pos = _player.state.position;
+      _fastSeek(pos + const Duration(seconds: 10));
     } else {
-      _player.play();
+      // 中间：播放/暂停
+      if (_player.state.playing) {
+        _player.pause();
+      } else {
+        _player.play();
+      }
     }
     _showControlsAndResetTimer();
   }
@@ -1355,6 +1379,185 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     );
   }
 
+  // ========== 快进间隔选择 ==========
+
+  void _showSkipIntervalSelector() {
+    showDialog(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('快进/后退间隔'),
+        children: _skipIntervals.map((interval) {
+          return SimpleDialogOption(
+            onPressed: () {
+              setState(() => _skipInterval = interval);
+              _saveSkipInterval();
+              Navigator.pop(ctx);
+              _showControlsAndResetTimer();
+            },
+            child: Row(
+              children: [
+                if (_skipInterval == interval)
+                  const Icon(Icons.check, size: 18)
+                else
+                  const SizedBox(width: 18),
+                const SizedBox(width: 8),
+                Text('${interval}秒'),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Future<void> _saveSkipInterval() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('skip_interval', _skipInterval);
+  }
+
+  Future<void> _loadSkipInterval() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getInt('skip_interval');
+    if (saved != null && _skipIntervals.contains(saved)) {
+      setState(() => _skipInterval = saved);
+    }
+  }
+
+  // ========== 清晰度选择 ==========
+
+  void _showQualitySelector() {
+    if (_qualityLabels.isEmpty) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('清晰度'),
+        children: List.generate(_qualityLabels.length, (i) {
+          return SimpleDialogOption(
+            onPressed: () {
+              if (i != _currentQualityIndex) {
+                _triedQualityIndices.clear();
+                _switchQuality(i);
+              }
+              Navigator.pop(ctx);
+              _showControlsAndResetTimer();
+            },
+            child: Row(
+              children: [
+                if (_currentQualityIndex == i)
+                  const Icon(Icons.check, size: 18)
+                else
+                  const SizedBox(width: 18),
+                const SizedBox(width: 8),
+                Text(_qualityLabels[i]),
+              ],
+            ),
+          );
+        }),
+      ),
+    );
+  }
+
+  void _switchQuality(int index) {
+    if (index < 0 || index >= _qualityUrls.length) return;
+    final savedPos = _player.state.position;
+    setState(() {
+      _currentQualityIndex = index;
+      _isLoading = true;
+      _loadingText = '切换清晰度...';
+    });
+    final videoId = '${widget.title}_$index';
+    _openVideoWithCacheCheck(_qualityUrls[index], videoId);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (savedPos > Duration.zero) {
+        _player.seek(savedPos);
+      }
+    });
+  }
+
+  // ========== 字幕 ==========
+
+  /// 加载字幕：外部URL + 内嵌字幕轨
+  Future<void> _loadSubtitles() async {
+    final urls = widget.subtitleUrls ?? [];
+    if (urls.isNotEmpty) {
+      try {
+        final tracks = await _subtitleService.loadMultiTrackFromUrl(
+          urls.asMap().entries.map((e) => (
+                url: e.value,
+                label: '字幕${e.key + 1}',
+                language: 'zh-CN',
+              )).toList(),
+        );
+        if (mounted) {
+          setState(() => _subtitleTracks = tracks);
+        }
+      } catch (e) {
+        _logger.w('字幕加载失败: $e');
+      }
+    }
+  }
+
+  void _toggleSubtitles() {
+    setState(() => _showSubtitles = !_showSubtitles);
+    _showControlsAndResetTimer();
+  }
+
+  void _showSubtitleTrackSelector() {
+    if (_subtitleTracks.length <= 1) {
+      _toggleSubtitles();
+      return;
+    }
+    showDialog(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('字幕'),
+        children: [
+          // 关闭字幕选项
+          SimpleDialogOption(
+            onPressed: () {
+              setState(() => _showSubtitles = false);
+              Navigator.pop(ctx);
+              _showControlsAndResetTimer();
+            },
+            child: Row(
+              children: [
+                if (!_showSubtitles)
+                  const Icon(Icons.check, size: 18)
+                else
+                  const SizedBox(width: 18),
+                const SizedBox(width: 8),
+                const Text('关闭'),
+              ],
+            ),
+          ),
+          // 字幕轨道列表
+          ...List.generate(_subtitleTracks.length, (i) {
+            return SimpleDialogOption(
+              onPressed: () {
+                setState(() {
+                  _showSubtitles = true;
+                  _currentSubtitleTrack = i;
+                });
+                Navigator.pop(ctx);
+                _showControlsAndResetTimer();
+              },
+              child: Row(
+                children: [
+                  if (_showSubtitles && _currentSubtitleTrack == i)
+                    const Icon(Icons.check, size: 18)
+                  else
+                    const SizedBox(width: 18),
+                  const SizedBox(width: 8),
+                  Text(_subtitleTracks[i].label),
+                ],
+              ),
+            );
+          }),
+        ],
+      ),
+    );
+  }
+
   // ========== 播放模式 ==========
 
   /// 获取播放模式图标
@@ -1513,6 +1716,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
       _isLoading = true;
       _loadingText = '加载中...';
       _retryCount = 0;
+      _triedQualityIndices.clear();
     });
 
     // 优化6: 重新开始性能监控会话
@@ -1601,7 +1805,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
           Positioned.fill(
             child: GestureDetector(
               onTap: _onSingleTap,
-              onDoubleTap: _onDoubleTap,
+              onDoubleTapDown: _onDoubleTapDown,
               onPanStart: _onPanStart,
               onPanUpdate: _onPanUpdate,
               onPanEnd: _onPanEnd,
@@ -1609,6 +1813,16 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
               child: Container(color: Colors.transparent),
             ),
           ),
+
+          // 字幕叠加层
+          if (_showSubtitles && _subtitleTracks.isNotEmpty)
+            SubtitleOverlay(
+              text: null, // 多轨道模式，自动查找
+              tracks: _subtitleTracks,
+              currentTrackIndex: _currentSubtitleTrack,
+              position: _lastVideoPosition,
+              subtitleService: _subtitleService,
+            ),
 
           // 优化11: 加载/缓冲覆盖层
           if (_isLoading)
@@ -1915,6 +2129,26 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
             style: const TextStyle(color: Colors.white),
           ),
         ),
+        // 清晰度按钮（多源时显示）
+        if (_hasQualityOptions)
+          TextButton(
+            onPressed: _showQualitySelector,
+            child: Text(
+              _qualityLabels[_currentQualityIndex],
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+          ),
+        // 字幕按钮
+        IconButton(
+          icon: Icon(
+            _showSubtitles ? Icons.closed_caption : Icons.closed_caption_disabled,
+            color: _subtitleTracks.isNotEmpty ? Colors.white : Colors.white30,
+          ),
+          onPressed: _subtitleTracks.isNotEmpty
+              ? _showSubtitleTrackSelector
+              : null,
+          tooltip: _subtitleTracks.isNotEmpty ? '字幕' : '无字幕',
+        ),
         // 画面比例按钮
         IconButton(
           icon: const Icon(Icons.aspect_ratio, color: Colors.white),
@@ -2065,14 +2299,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
             onPressed: _playPrevEpisode,
           ),
         const SizedBox(width: 8),
-        // 后退10秒
-        IconButton(
-          icon: const Icon(Icons.replay_10, color: Colors.white, size: 32),
-          onPressed: () {
-            final pos = _player.state.position;
-            _fastSeek(pos - const Duration(seconds: 10));
+        // 后退N秒（长按选间隔）
+        GestureDetector(
+          onLongPress: () {
             _showControlsAndResetTimer();
+            _showSkipIntervalSelector();
           },
+          child: IconButton(
+            icon: Icon(Icons.replay, color: Colors.white, size: 32),
+            onPressed: () {
+              final pos = _player.state.position;
+              _fastSeek(pos - Duration(seconds: _skipInterval));
+              _showControlsAndResetTimer();
+            },
+          ),
         ),
         const SizedBox(width: 8),
         // 播放/暂停
@@ -2099,14 +2339,20 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
           },
         ),
         const SizedBox(width: 8),
-        // 前进10秒
-        IconButton(
-          icon: const Icon(Icons.forward_10, color: Colors.white, size: 32),
-          onPressed: () {
-            final pos = _player.state.position;
-            _fastSeek(pos + const Duration(seconds: 10));
+        // 前进N秒（长按选间隔）
+        GestureDetector(
+          onLongPress: () {
             _showControlsAndResetTimer();
+            _showSkipIntervalSelector();
           },
+          child: IconButton(
+            icon: Icon(Icons.forward_30, color: Colors.white, size: 32),
+            onPressed: () {
+              final pos = _player.state.position;
+              _fastSeek(pos + Duration(seconds: _skipInterval));
+              _showControlsAndResetTimer();
+            },
+          ),
         ),
         const SizedBox(width: 8),
         // 下一集

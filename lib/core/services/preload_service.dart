@@ -1,9 +1,11 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:dio/dio.dart';
+import 'package:dio/io.dart';
 import 'package:logger/logger.dart';
 import 'video_cache_service.dart';
 import '../network/network_engine.dart' show NetworkCondition, Semaphore;
+import '../network/proxy_config_service.dart';
 
 /// 预加载优先级枚举
 enum PreloadPriority {
@@ -177,7 +179,18 @@ class PreloadStrategy {
 /// 控制并发数和带宽占用，不干扰当前播放下载。
 class PreloadService {
   final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
-  final Dio _dio = Dio();
+  final Dio _dio = PreloadService._createDio();
+
+  static Dio _createDio() {
+    final dio = Dio();
+    (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
+      final client = HttpClient();
+      client.badCertificateCallback = (cert, host, port) => true;
+      try { ProxyConfigService.instance.configureHttpClient(client); } catch (_) {}
+      return client;
+    };
+    return dio;
+  }
 
   /// 视频缓存服务
   final VideoCacheService _cacheService;
@@ -458,14 +471,38 @@ class PreloadService {
       // 保存预加载数据到缓存
       final data = response.data;
       if (data != null && data.isNotEmpty) {
-        final bytesData = data is List<int> ? data : (data as String).codeUnits;
-        await _cacheService.putSegment(
-          task.videoId,
-          'preload_${task.id}',
-          bytesData,
-          quality: '720p',
-        );
-        task.loadedBytes = bytesData.length;
+        task.loadedBytes = data.length;
+
+        // 完整视频下载 → 存为 L3 完整文件，播放器可直接用
+        // 部分预加载（Range 请求）→ 存为 L4 分片，后续通过代理服务使用
+        final isFullVideo = task.preloadBytes == 0;
+        if (isFullVideo) {
+          final tempDir = await Directory.systemTemp.createTemp('yl_preload_');
+          try {
+            final ext = task.url.contains('.ts')
+                ? '.ts'
+                : task.url.contains('.m3u8')
+                    ? '.m3u8'
+                    : '.mp4';
+            final tempFile = File('${tempDir.path}/video$ext');
+            await tempFile.writeAsBytes(data);
+            await _cacheService.putVideo(
+              task.videoId,
+              tempFile.path,
+              quality: '720p',
+            );
+            _logger.i('完整视频已缓存(L3): ${task.videoId}');
+          } finally {
+            await tempDir.delete(recursive: true);
+          }
+        } else {
+          await _cacheService.putSegment(
+            task.videoId,
+            'preload_${task.id}',
+            data,
+            quality: '720p',
+          );
+        }
       }
 
       task.status = PreloadTaskStatus.completed;

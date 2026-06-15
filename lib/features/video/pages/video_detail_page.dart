@@ -380,12 +380,27 @@ class _EpisodeGrid extends StatelessWidget {
                 // 构建播放参数
                 final epNames = episodes.map((e) => e.name).join(',');
                 final epUrls = episodes.map((e) => e.url).join(',');
+                // 跨源清晰度选项：收集所有源中同索引的URL
+                final qLabels = <String>[];
+                final qUrls = <String>[];
+                for (final src in allSources) {
+                  final eps = src.episodes;
+                  if (eps.isNotEmpty) {
+                    final qi = index.clamp(0, eps.length - 1);
+                    qLabels.add(src.name);
+                    qUrls.add(eps[qi].url);
+                  }
+                }
+                final qualityLabels = qLabels.join(',');
+                final qualityUrls = qUrls.join(',');
                 context.push(
                   '/player?url=${Uri.encodeComponent(ep.url)}'
                   '&title=${Uri.encodeComponent(ep.name)}'
                   '&index=$index'
                   '&epNames=${Uri.encodeComponent(epNames)}'
-                  '&epUrls=${Uri.encodeComponent(epUrls)}',
+                  '&epUrls=${Uri.encodeComponent(epUrls)}'
+                  '&qualityLabels=${Uri.encodeComponent(qualityLabels)}'
+                  '&qualityUrls=${Uri.encodeComponent(qualityUrls)}',
                 );
               },
               avatar: IconButton(
