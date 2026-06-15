@@ -11,6 +11,7 @@ import '../../../core/services/power_manager_service.dart';
 import '../../../core/services/video_cache_service.dart';
 import '../../../core/services/metrics_collector_service.dart';
 import '../../../core/network/network_engine.dart';
+import '../providers/video_providers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:logger/logger.dart';
 
@@ -682,9 +683,12 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
 
   /// 通知预加载服务缓冲状态
   void _notifyPreloadServiceBuffering(bool isBuffering) {
-    // 预加载服务通过 NetworkEngine 的单例访问
-    // 此处仅记录日志，实际暂停由 PreloadService.notifyPlaybackBuffering 处理
-    _logger.d('播放缓冲状态: $isBuffering');
+    try {
+      final preloadService = ref.read(preloadServiceProvider);
+      preloadService.notifyPlaybackBuffering(isBuffering);
+    } catch (e) {
+      _logger.d('通知预加载缓冲状态失败: $e');
+    }
   }
 
   // ========== 优化3: ABR 自适应码率回调 ==========
@@ -805,14 +809,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     final videoId = '${widget.title}_$nextIndex';
 
     _logger.i('预加载下一集: index=$nextIndex');
-    // 使用 PreloadService 预加载下一集
-    // 注意：PreloadService 需要 VideoCacheService 实例，
-    // 此处通过 try-catch 保护，避免 API 不匹配时崩溃
     try {
-      // PreloadService 构造需要 VideoCacheService，
-      // 实际项目中应通过 Provider 注入单例 PreloadService
-      // 此处仅记录预加载意图，实际预加载由全局 PreloadService 管理
-      _logger.d('预加载触发: videoId=$videoId, url=$nextUrl');
+      final preloadService = ref.read(preloadServiceProvider);
+      preloadService.preloadNextEpisode(videoId, nextUrl);
     } catch (e) {
       _logger.w('预加载下一集失败: $e');
     }
@@ -822,13 +821,13 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   void _preloadAdjacentEpisodes() {
     if (widget.episodeUrls == null) return;
 
-    // 省电模式下禁用预加载
     if (_powerMode == PowerMode.powerSaving) {
       _logger.d('省电模式，跳过预加载');
       return;
     }
 
-    // 预加载前后各一集
+    final preloadService = ref.read(preloadServiceProvider);
+
     final indices = <int>[];
     if (_currentEpisodeIndex > 0) {
       indices.add(_currentEpisodeIndex - 1);
@@ -841,8 +840,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
       final url = widget.episodeUrls![index];
       final videoId = '${widget.title}_$index';
       try {
-        // 实际项目中应通过 Provider 注入 PreloadService 单例
-        _logger.d('预加载相邻集: videoId=$videoId, url=$url');
+        preloadService.preloadAdjacent(videoId, url);
       } catch (e) {
         _logger.w('预加载相邻集失败: $e');
       }
