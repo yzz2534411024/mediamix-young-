@@ -67,9 +67,6 @@ class MetricsCollectorService {
     // 性能类事件检查性能数据开关
     if (_isPerformanceEvent(event) && !privacy.canCollectPerformanceData) return;
 
-    // 使用习惯类事件检查使用数据开关
-    if (_isUsageEvent(event) && !privacy.canCollectUsageData) return;
-
     final sid = sessionId ?? PlayerMetricsService.instance.currentSessionId ?? '';
     final vid = videoId ?? '';
 
@@ -165,18 +162,6 @@ class MetricsCollectorService {
         return true;
       case MetricsEvent.playStart:
       case MetricsEvent.playComplete:
-        return false;
-    }
-  }
-
-  /// 判断事件是否属于使用习惯数据类别
-  bool _isUsageEvent(MetricsEvent event) {
-    switch (event) {
-      case MetricsEvent.playStart:
-      case MetricsEvent.playComplete:
-      case MetricsEvent.seekStart:
-        return true;
-      default:
         return false;
     }
   }

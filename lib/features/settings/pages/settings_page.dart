@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../video/providers/video_providers.dart';
 import '../../video/models/video_models.dart';
 import '../../../core/services/theme_provider.dart';
@@ -24,7 +25,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   // 隐私偏好
   bool _metricsEnabled = false;
   bool _performanceDataEnabled = true;
-  bool _usageDataEnabled = true;
   bool _wifiOnlyUpload = true;
   Map<String, dynamic> _localDataSummary = {};
 
@@ -39,7 +39,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     setState(() {
       _metricsEnabled = prefs.metricsEnabled;
       _performanceDataEnabled = prefs.performanceDataEnabled;
-      _usageDataEnabled = prefs.usageDataEnabled;
       _wifiOnlyUpload = prefs.wifiOnlyUpload;
     });
     _refreshDataSummary();
@@ -130,16 +129,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               },
             ),
             SwitchListTile(
-              secondary: const Icon(Icons.timeline),
-              title: const Text('使用习惯数据'),
-              subtitle: const Text('观看时长、操作频次等'),
-              value: _usageDataEnabled,
-              onChanged: (value) async {
-                await PrivacyManagerService.instance.setUsageDataEnabled(value);
-                setState(() => _usageDataEnabled = value);
-              },
-            ),
-            SwitchListTile(
               secondary: const Icon(Icons.wifi),
               title: const Text('仅 WiFi 下上报'),
               subtitle: const Text('移动网络下不上报数据'),
@@ -161,6 +150,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             ),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _showLocalDataDialog(),
+          ),
+          ListTile(
+            leading: const Icon(Icons.file_download),
+            title: const Text('导出数据'),
+            subtitle: const Text('导出使用数据和性能数据为JSON文件'),
+            onTap: () => _exportData(),
           ),
           ListTile(
             leading: const Icon(Icons.cloud_upload),
@@ -228,6 +223,48 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
         return '上报失败，稍后自动重试';
       case UploadResult.noData:
         return '暂无待上报数据';
+    }
+  }
+
+  /// 导出数据到 JSON 文件并分享
+  Future<void> _exportData() async {
+    final path = await DataReporterService.instance.exportDataToFile();
+    if (!mounted) return;
+
+    if (path != null) {
+      try {
+        await Share.shareXFiles([XFile(path)], text: 'Young 数据导出');
+        if (mounted) {
+          ScaffoldMessenger.of(context).clearSnackBars();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('数据导出成功'),
+              duration: Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).clearSnackBars();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('分享失败: $e'),
+              duration: const Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      }
+    } else {
+      ScaffoldMessenger.of(context).clearSnackBars();
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('导出数据失败，请稍后重试'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 

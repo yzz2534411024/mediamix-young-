@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:logger/logger.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../database/database.dart';
 import 'privacy_manager_service.dart';
@@ -335,6 +336,76 @@ class DataReporterService {
   Future<Map<String, dynamic>> getLocalDataSummary() async {
     if (_db == null) return {};
     return _db!.getMetricsSummary();
+  }
+
+  /// 导出所有指标数据为 JSON 文件
+  ///
+  /// 返回导出文件路径，失败返回 null
+  Future<String?> exportDataToFile() async {
+    if (_db == null) return null;
+
+    try {
+      // 读取所有会话和事件（包括已上传的）
+      final sessions = await _db!.getAllSessions();
+      final events = await _db!.getAllEvents();
+
+      // 构建 JSON 结构
+      final now = DateTime.now();
+      final exportData = {
+        'export_date': now.toIso8601String(),
+        'app_version': '0.2.0',
+        'device_id': _getDeviceId(),
+        'sessions': sessions.map((s) => <String, dynamic>{
+          'session_id': s.sessionId,
+          'video_id': s.videoId,
+          'first_frame_time_ms': s.firstFrameTimeMs,
+          'buffering_count': s.bufferingCount,
+          'buffering_total_ms': s.bufferingTotalMs,
+          'stutter_rate': s.stutterRate,
+          'quality_changes': s.qualityChanges,
+          'seek_count': s.seekCount,
+          'seek_avg_ms': s.seekAvgMs,
+          'error_count': s.errorCount,
+          'cache_hits': s.cacheHits,
+          'cache_misses': s.cacheMisses,
+          'avg_bandwidth_kbps': s.avgBandwidthKbps,
+          'peak_bandwidth_kbps': s.peakBandwidthKbps,
+          'start_time': s.startTime,
+          'end_time': s.endTime,
+          'uploaded': s.uploaded,
+        }).toList(),
+        'events': events.map((e) => <String, dynamic>{
+          'id': e.id,
+          'session_id': e.sessionId,
+          'video_id': e.videoId,
+          'event_type': e.eventType,
+          'timestamp': e.timestamp,
+          'payload': e.payloadJson,
+          'uploaded': e.uploaded,
+        }).toList(),
+      };
+
+      // 生成文件名：young_data_export_{YYYYMMDD_HHmmss}.json
+      final timestamp = '${now.year.toString().padLeft(4, '0')}'
+          '${now.month.toString().padLeft(2, '0')}'
+          '${now.day.toString().padLeft(2, '0')}'
+          '_'
+          '${now.hour.toString().padLeft(2, '0')}'
+          '${now.minute.toString().padLeft(2, '0')}'
+          '${now.second.toString().padLeft(2, '0')}';
+      final fileName = 'young_data_export_$timestamp.json';
+
+      // 写入临时目录
+      final tempDir = await getTemporaryDirectory();
+      final file = File('${tempDir.path}/$fileName');
+      await file.writeAsString(const JsonEncoder.withIndent('  ').convert(exportData));
+
+      _logger.i('数据已导出: ${file.path} (${sessions.length} 会话, ${events.length} 事件)');
+      return file.path;
+    } catch (e) {
+      _logger.e('导出数据失败: $e');
+      return null;
+    }
   }
 
   /// 清除所有本地指标数据

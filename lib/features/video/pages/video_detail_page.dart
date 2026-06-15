@@ -296,6 +296,15 @@ class _DetailContentState extends ConsumerState<_DetailContent> {
             ),
           ),
         ],
+
+        // 相关推荐
+        const Divider(),
+        const SizedBox(height: 8),
+        _RelatedVideos(
+          sourceKey: widget.detail.sourceKey,
+          typeId: widget.detail.typeId,
+          excludeVodId: widget.detail.vodId,
+        ),
       ],
     );
   }
@@ -404,6 +413,95 @@ class _EpisodeGrid extends StatelessWidget {
           }),
         ),
       ],
+    );
+  }
+}
+
+/// 相关推荐
+class _RelatedVideos extends ConsumerWidget {
+  final String sourceKey;
+  final int? typeId;
+  final String excludeVodId;
+
+  const _RelatedVideos({
+    required this.sourceKey,
+    required this.typeId,
+    required this.excludeVodId,
+  });
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (typeId == null) return const SizedBox.shrink();
+
+    final relatedAsync = ref.watch(relatedVideosProvider(
+      (sourceKey: sourceKey, typeId: typeId, excludeVodId: excludeVodId),
+    ));
+
+    return relatedAsync.when(
+      loading: () => const SizedBox(
+        height: 160,
+        child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+      ),
+      error: (_, __) => const SizedBox.shrink(),
+      data: (items) {
+        if (items.isEmpty) return const SizedBox.shrink();
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('相关推荐', style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 160,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (context, index) {
+                  final item = items[index];
+                  return SizedBox(
+                    width: 100,
+                    child: GestureDetector(
+                      onTap: () => context.push('/detail?vodId=${Uri.encodeComponent(item.vodId)}&sourceKey=${Uri.encodeComponent(item.sourceKey ?? sourceKey)}'),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Expanded(
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(6),
+                              child: item.vodPic != null && item.vodPic!.isNotEmpty
+                                ? CachedNetworkImage(
+                                    imageUrl: item.vodPic!,
+                                    fit: BoxFit.cover,
+                                    memCacheWidth: 200,
+                                    placeholder: (_, __) => Container(color: Colors.grey[200]),
+                                    errorWidget: (_, __, ___) => Container(
+                                      color: Colors.grey[200],
+                                      child: const Icon(Icons.movie, color: Colors.grey, size: 24),
+                                    ),
+                                  )
+                                : Container(
+                                    color: Colors.grey[200],
+                                    child: const Icon(Icons.movie, color: Colors.grey, size: 24),
+                                  ),
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            item.vodName,
+                            style: const TextStyle(fontSize: 11),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }

@@ -262,6 +262,8 @@ class AppDatabase extends _$AppDatabase {
   Future<void> insertMetricsEvent(MetricsEventsCompanion entry) =>
       into(metricsEvents).insert(entry);
 
+  Future<List<MetricsEventRecord>> getAllEvents() => select(metricsEvents).get();
+
   Future<List<MetricsEventRecord>> getUnuploadedEvents({int limit = 50}) =>
       (select(metricsEvents)..where((t) => t.uploaded.equals(false))..limit(limit)).get();
 
@@ -281,6 +283,8 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> insertMetricsSession(MetricsSessionsCompanion entry) =>
       into(metricsSessions).insert(entry, mode: InsertMode.insertOrReplace);
+
+  Future<List<MetricsSession>> getAllSessions() => select(metricsSessions).get();
 
   Future<List<MetricsSession>> getUnuploadedSessions({int limit = 50}) =>
       (select(metricsSessions)..where((t) => t.uploaded.equals(false))..limit(limit)).get();

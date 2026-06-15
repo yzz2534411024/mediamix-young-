@@ -174,17 +174,30 @@ class VideoListNotifier extends AsyncNotifier<VideoListState> {
     if (site == null) return const VideoListState();
 
     final api = ref.read(videoApiServiceProvider);
-    final response = await api.fetchVideoList(
-      site.apiUrl,
-      page: 1,
-      typeId: category?.typeId,
-    );
+
+    // 首次加载合并两页数据，增加首页推荐数量
+    final page1Future = api.fetchVideoList(site.apiUrl, page: 1, typeId: category?.typeId);
+    final page2Future = api.fetchVideoList(site.apiUrl, page: 2, typeId: category?.typeId);
+
+    final results = await Future.wait([page1Future, page2Future], eagerError: true);
+    final page1 = results[0];
+    final page2 = results[1];
+
+    // 合并去重（按 vodId 去重）
+    final seenIds = <String>{};
+    final allItems = <VideoItem>[];
+    for (final item in [...page1.list, ...page2.list]) {
+      if (!seenIds.contains(item.vodId)) {
+        seenIds.add(item.vodId);
+        allItems.add(item);
+      }
+    }
 
     return VideoListState(
-      items: response.list,
-      currentPage: response.page,
-      totalPages: response.pageCount,
-      hasMore: response.page < response.pageCount,
+      items: allItems,
+      currentPage: 2, // 已加载到第2页
+      totalPages: page1.pageCount,
+      hasMore: 2 < page1.pageCount,
     );
   }
 
@@ -233,16 +246,29 @@ class VideoListNotifier extends AsyncNotifier<VideoListState> {
     }
     final api = ref.read(videoApiServiceProvider);
     try {
-      final response = await api.fetchVideoList(
-        site.apiUrl,
-        page: 1,
-        typeId: category?.typeId,
-      );
+      // 刷新时也合并两页数据，增加首页推荐数量
+      final page1Future = api.fetchVideoList(site.apiUrl, page: 1, typeId: category?.typeId);
+      final page2Future = api.fetchVideoList(site.apiUrl, page: 2, typeId: category?.typeId);
+
+      final results = await Future.wait([page1Future, page2Future], eagerError: true);
+      final page1 = results[0];
+      final page2 = results[1];
+
+      // 合并去重（按 vodId 去重）
+      final seenIds = <String>{};
+      final allItems = <VideoItem>[];
+      for (final item in [...page1.list, ...page2.list]) {
+        if (!seenIds.contains(item.vodId)) {
+          seenIds.add(item.vodId);
+          allItems.add(item);
+        }
+      }
+
       state = AsyncData(VideoListState(
-        items: response.list,
-        currentPage: response.page,
-        totalPages: response.pageCount,
-        hasMore: response.page < response.pageCount,
+        items: allItems,
+        currentPage: 2, // 已加载到第2页
+        totalPages: page1.pageCount,
+        hasMore: 2 < page1.pageCount,
       ));
     } catch (e) {
       state = AsyncError(e, StackTrace.current);
@@ -278,6 +304,20 @@ final videoDetailProvider = FutureProvider.family<VideoDetail, ({String vodId, S
     final originalSite = sites.where((s) => s.key == params.sourceKey).firstOrNull;
     if (originalSite == null) throw Exception('站点不存在');
     return api.fetchVideoDetail(originalSite.apiUrl, params.vodId, sourceKey: params.sourceKey);
+  }
+});
+
+/// 相关推荐 Provider（同分类影片）
+final relatedVideosProvider = FutureProvider.family<List<VideoItem>, ({String sourceKey, int? typeId, String excludeVodId})>((ref, params) async {
+  if (params.typeId == null) return [];
+  final site = ref.watch(currentSiteProvider);
+  if (site == null) return [];
+  final api = ref.read(videoApiServiceProvider);
+  try {
+    final response = await api.fetchVideoList(site.apiUrl, page: 1, typeId: params.typeId);
+    return response.list.where((item) => item.vodId != params.excludeVodId).take(20).toList();
+  } catch (e) {
+    return [];
   }
 });
 

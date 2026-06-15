@@ -225,6 +225,7 @@ class VideoApiService {
       vodArea: detail.vodArea,
       vodRemarks: detail.vodRemarks,
       typeName: detail.typeName,
+      typeId: detail.typeId,
       sourceKey: detail.sourceKey,
       playSources: allSources,
     );
@@ -367,6 +368,7 @@ class VideoApiService {
               vodArea: detail.vodArea,
               vodRemarks: detail.vodRemarks,
               typeName: detail.typeName,
+              typeId: detail.typeId,
               sourceKey: detail.sourceKey,
               playSources: reDetail.playSources,
             );
@@ -450,6 +452,7 @@ class VideoApiService {
           vodArea: cached.data.vodArea,
           vodRemarks: cached.data.vodRemarks,
           typeName: cached.data.typeName,
+          typeId: cached.data.typeId,
           sourceKey: sourceKey,
           playSources: cached.data.playSources,
         );

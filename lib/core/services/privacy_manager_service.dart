@@ -14,9 +14,6 @@ class PrivacyPreferences {
   /// 性能数据开关：首屏时间、卡顿率、Seek延迟等
   final bool performanceDataEnabled;
 
-  /// 使用习惯数据开关：观看时长、操作频次等
-  final bool usageDataEnabled;
-
   /// 仅 WiFi 下上报
   final bool wifiOnlyUpload;
 
@@ -26,7 +23,6 @@ class PrivacyPreferences {
   const PrivacyPreferences({
     this.metricsEnabled = false,
     this.performanceDataEnabled = true,
-    this.usageDataEnabled = true,
     this.wifiOnlyUpload = true,
     this.hasShownConsentDialog = false,
   });
@@ -34,14 +30,12 @@ class PrivacyPreferences {
   PrivacyPreferences copyWith({
     bool? metricsEnabled,
     bool? performanceDataEnabled,
-    bool? usageDataEnabled,
     bool? wifiOnlyUpload,
     bool? hasShownConsentDialog,
   }) {
     return PrivacyPreferences(
       metricsEnabled: metricsEnabled ?? this.metricsEnabled,
       performanceDataEnabled: performanceDataEnabled ?? this.performanceDataEnabled,
-      usageDataEnabled: usageDataEnabled ?? this.usageDataEnabled,
       wifiOnlyUpload: wifiOnlyUpload ?? this.wifiOnlyUpload,
       hasShownConsentDialog: hasShownConsentDialog ?? this.hasShownConsentDialog,
     );
@@ -65,7 +59,6 @@ class PrivacyManagerService {
   // SharedPreferences 键名
   static const _keyMetricsEnabled = 'privacy_metrics_enabled';
   static const _keyPerformanceData = 'privacy_performance_data';
-  static const _keyUsageData = 'privacy_usage_data';
   static const _keyWifiOnly = 'privacy_wifi_only';
   static const _keyConsentShown = 'privacy_consent_shown';
 
@@ -97,10 +90,6 @@ class PrivacyManagerService {
   bool get canCollectPerformanceData =>
       _prefs.metricsEnabled && _prefs.performanceDataEnabled;
 
-  /// 是否允许采集使用习惯数据
-  bool get canCollectUsageData =>
-      _prefs.metricsEnabled && _prefs.usageDataEnabled;
-
   /// 是否需要显示首次授权弹窗
   bool get shouldShowConsentDialog => !_prefs.hasShownConsentDialog;
 
@@ -111,7 +100,6 @@ class PrivacyManagerService {
       _prefs = PrivacyPreferences(
         metricsEnabled: sp.getBool(_keyMetricsEnabled) ?? false,
         performanceDataEnabled: sp.getBool(_keyPerformanceData) ?? true,
-        usageDataEnabled: sp.getBool(_keyUsageData) ?? true,
         wifiOnlyUpload: sp.getBool(_keyWifiOnly) ?? true,
         hasShownConsentDialog: sp.getBool(_keyConsentShown) ?? false,
       );
@@ -144,13 +132,6 @@ class PrivacyManagerService {
   Future<void> setPerformanceDataEnabled(bool enabled) async {
     _prefs = _prefs.copyWith(performanceDataEnabled: enabled);
     (await _sp).setBool(_keyPerformanceData, enabled);
-    _notify();
-  }
-
-  /// 更新使用习惯数据开关
-  Future<void> setUsageDataEnabled(bool enabled) async {
-    _prefs = _prefs.copyWith(usageDataEnabled: enabled);
-    (await _sp).setBool(_keyUsageData, enabled);
     _notify();
   }
 
@@ -200,7 +181,6 @@ class PrivacyManagerService {
     final sp = await _sp;
     await sp.remove(_keyMetricsEnabled);
     await sp.remove(_keyPerformanceData);
-    await sp.remove(_keyUsageData);
     await sp.remove(_keyWifiOnly);
     await sp.remove(_keyConsentShown);
     _notify();

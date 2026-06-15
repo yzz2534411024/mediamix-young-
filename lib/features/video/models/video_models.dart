@@ -179,6 +179,7 @@ class VideoDetail {
   final String? vodArea;
   final String? vodRemarks;
   final String? typeName;
+  final int? typeId;
   final String sourceKey;
   final List<PlaySource> playSources;
 
@@ -193,6 +194,7 @@ class VideoDetail {
     this.vodArea,
     this.vodRemarks,
     this.typeName,
+    this.typeId,
     required this.sourceKey,
     this.playSources = const [],
   });
@@ -242,6 +244,7 @@ class VideoDetail {
       vodArea: json['vod_area']?.toString(),
       vodRemarks: json['vod_remarks']?.toString(),
       typeName: json['type_name']?.toString(),
+      typeId: int.tryParse(json['type_id']?.toString() ?? ''),
       sourceKey: sourceKey,
       playSources: sources,
     );
