@@ -76,7 +76,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     _manager.onSubtitlesLoaded = _onSubtitlesLoaded;
     _manager.onNotifyPreloadBuffering = _onNotifyPreloadBuffering;
 
-    // 初始化核心管理器
+    // 初始化核心管理器（异步，确保初始化顺序正确）
     final db = ref.read(databaseProvider);
     _manager.initialize(
       url: widget.url,
@@ -88,16 +88,28 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
       qualityUrls: widget.qualityUrls,
       subtitleUrls: widget.subtitleUrls,
       db: db,
-    );
+    ).then((_) {
+      // 初始化完成后再查询进度和预加载
+      if (mounted) {
+        _checkAndResumeProgress();
+        _manager.preloadAdjacentEpisodes();
+      }
+    }).catchError((e) {
+      // 初始化失败时显示错误
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('播放器初始化失败: $e'),
+            duration: const Duration(seconds: 3),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    });
 
     // 初始显示控制栏，5秒后自动隐藏
     _startHideTimer();
-
-    // 查询播放进度 & 预加载
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkAndResumeProgress();
-      _manager.preloadAdjacentEpisodes();
-    });
   }
 
   @override

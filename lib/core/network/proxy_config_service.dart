@@ -75,7 +75,7 @@ class ProxyConfigService {
   static final ProxyConfigService instance = ProxyConfigService._();
   ProxyConfigService._();
 
-  final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
+  final Logger _logger = Logger(printer: const SimplePrinter());
   static const String _prefKey = 'proxy_config';
 
   ProxyConfig _config = const ProxyConfig();

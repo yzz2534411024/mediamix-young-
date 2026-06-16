@@ -15,7 +15,7 @@ class LocalProxyServer {
   static LocalProxyServer? _instance;
   static LocalProxyServer get instance => _instance ??= LocalProxyServer._();
 
-  final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
+  final Logger _logger = Logger(printer: const SimplePrinter());
   final Dio _dio = _createDio();
 
   HttpServer? _server;
@@ -48,12 +48,33 @@ class LocalProxyServer {
   }
 
   /// 启动代理服务器，绑定到随机可用端口
+  /// Fix 2: 添加超时保护和重试机制
   Future<void> start() async {
     if (_server != null) return;
-    _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    _port = _server!.port;
-    _server!.listen(_handleRequest);
-    _logger.i('本地代理已启动: http://127.0.0.1:$_port');
+    try {
+      _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0)
+          .timeout(const Duration(seconds: 5));
+      _port = _server!.port;
+      _server!.listen(_handleRequest);
+      _logger.i('本地代理已启动: http://127.0.0.1:$_port');
+    } on TimeoutException {
+      _logger.w('本地代理启动超时(5s)，尝试重试');
+      try {
+        _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0)
+            .timeout(const Duration(seconds: 3));
+        _port = _server!.port;
+        _server!.listen(_handleRequest);
+        _logger.i('本地代理重试成功: http://127.0.0.1:$_port');
+      } catch (e) {
+        _logger.e('本地代理启动失败: $e');
+        _server = null;
+        _port = 0;
+      }
+    } catch (e) {
+      _logger.e('本地代理启动失败: $e');
+      _server = null;
+      _port = 0;
+    }
   }
 
   /// 停止代理服务器

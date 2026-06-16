@@ -306,7 +306,7 @@ class VideoCacheService {
   /// 是否已初始化
   bool _initialized = false;
 
-  final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
+  final Logger _logger = Logger(printer: const SimplePrinter());
 
   // ----------------------------------------------------------
   // 常量配置

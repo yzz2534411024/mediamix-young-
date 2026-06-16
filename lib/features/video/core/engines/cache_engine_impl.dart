@@ -8,7 +8,7 @@ import 'engine_interfaces.dart';
 import 'package:logger/logger.dart';
 
 class CacheEngineImpl implements CacheEngine {
-  final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
+  final Logger _logger = Logger(printer: const SimplePrinter());
 
   bool _isUsingCache = false;
 
@@ -50,8 +50,15 @@ class CacheEngineImpl implements CacheEngine {
       MetricsCollectorService.instance.recordEvent(MetricsEvent.cacheMiss);
       _isUsingCache = false;
 
-      // 启动本地代理，走边播边缓存通道
-      await LocalProxyServer.instance.start();
+      // 启动本地代理，走边播边缓存通道（添加超时保护）
+      try {
+        await LocalProxyServer.instance.start()
+            .timeout(const Duration(seconds: 5));
+      } catch (e) {
+        _logger.w('本地代理启动失败，使用原始URL: $e');
+        _isUsingCache = false;
+        return url;
+      }
       final proxyUrl = LocalProxyServer.instance.proxyUrl(url, videoId);
       _logger.i(
           '通过本地代理播放: $videoId → 127.0.0.1:${LocalProxyServer.instance.port}');
@@ -90,14 +97,20 @@ class CacheEngineImpl implements CacheEngine {
         );
       }
 
-      // 3. 未命中：走代理
+      // 3. 未命中：走代理（添加超时保护）
       PlayerMetricsService.instance.recordEvent(MetricsEvent.cacheMiss);
       MetricsCollectorService.instance.recordEvent(MetricsEvent.cacheMiss);
       _isUsingCache = false;
 
-      await LocalProxyServer.instance.start();
-      final proxyUrl = LocalProxyServer.instance.proxyUrl(url, videoId);
-      return CacheResolveResult(url: proxyUrl, isUsingCache: false);
+      try {
+        await LocalProxyServer.instance.start()
+            .timeout(const Duration(seconds: 5));
+        final proxyUrl = LocalProxyServer.instance.proxyUrl(url, videoId);
+        return CacheResolveResult(url: proxyUrl, isUsingCache: false);
+      } catch (e) {
+        _logger.w('本地代理启动失败，使用原始URL: $e');
+        return CacheResolveResult(url: url, isUsingCache: false);
+      }
     } catch (e) {
       _logger.w('缓存/代理查询失败，使用网络URL: $e');
       _isUsingCache = false;

@@ -20,7 +20,7 @@ import '../../../core/network/proxy_config_service.dart';
 /// - 接口合并：详情+播放信息合并请求
 class VideoApiService {
   final Dio _dio;
-  final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
+  final Logger _logger = Logger(printer: const SimplePrinter());
 
   // DNS预解析缓存，5分钟TTL
   final Map<String, _DnsCacheEntry> _dnsCache = {};

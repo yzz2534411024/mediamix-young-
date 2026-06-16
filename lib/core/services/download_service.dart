@@ -12,7 +12,7 @@ import '../database/database_provider.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logger/logger.dart';
 
-final _logger = Logger(printer: PrettyPrinter(methodCount: 0));
+final _logger = Logger(printer: const SimplePrinter());
 
 /// 下载状态枚举
 enum DownloadStatus {

@@ -39,7 +39,7 @@ class ApiSourceDescriptor {
 /// 负责将不同格式的 API 响应转换为统一的内部模型。
 /// 支持 CMS 采集站、JSON REST、M3U8 直接源等多种格式。
 class ApiAdapter {
-  final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
+  final Logger _logger = Logger(printer: const SimplePrinter());
 
   // ============================================================
   // 分类列表解析

@@ -75,7 +75,7 @@ class DeviceCapabilityService {
   static final DeviceCapabilityService instance = DeviceCapabilityService._();
   DeviceCapabilityService._();
 
-  final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
+  final Logger _logger = Logger(printer: const SimplePrinter());
 
   DeviceCapabilityReport? _cachedReport;
   static const String _prefKey = 'device_capability_report';

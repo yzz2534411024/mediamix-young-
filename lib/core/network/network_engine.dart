@@ -220,7 +220,7 @@ class RequestPriority {
 class NetworkEngine {
   static NetworkEngine? _instance;
   late final Dio _dio;
-  final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
+  final Logger _logger = Logger(printer: const SimplePrinter());
 
   // DNS 预解析缓存
   final _dnsCache = <String, DateTime>{};

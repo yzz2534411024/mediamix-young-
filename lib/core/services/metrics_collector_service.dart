@@ -22,7 +22,7 @@ class MetricsCollectorService {
 
   MetricsCollectorService._();
 
-  final Logger _logger = Logger(printer: PrettyPrinter(methodCount: 0));
+  final Logger _logger = Logger(printer: const SimplePrinter());
 
   /// 数据库实例（由 initialize 注入）
   AppDatabase? _db;
