@@ -432,6 +432,50 @@ class VideoCacheService {
     return null;
   }
 
+  /// 跨清晰度缓存查找 — 清晰度降级命中
+  ///
+  /// 当请求的清晰度未命中时，尝试查找其他清晰度的缓存。
+  /// 按清晰度优先级排序：请求的清晰度 > 高清 > 标清 > 流畅
+  /// 返回 (path, quality) 或 null
+  Future<({String path, String quality})?> getAnyQualityCachePath(
+    String videoId, {
+    String? preferredQuality,
+  }) async {
+    // 1. 先查找请求的清晰度
+    if (preferredQuality != null) {
+      final exact = await getCachePath(videoId, quality: preferredQuality);
+      if (exact != null) {
+        return (path: exact, quality: preferredQuality);
+      }
+    }
+
+    // 2. 按清晰度优先级查找：超清 > 高清 > 标清 > 流畅
+    const qualityPriority = ['超清', '高清', '标清', '流畅'];
+    for (final q in qualityPriority) {
+      if (q == preferredQuality) continue; // 已查过
+      final path = await getCachePath(videoId, quality: q);
+      if (path != null) {
+        return (path: path, quality: q);
+      }
+    }
+
+    // 3. 查找磁盘索引中该 videoId 的任何清晰度
+    for (final entry in _diskIndex.values) {
+      if (entry.videoId == videoId && !entry.isExpired && entry.isComplete) {
+        final file = File(entry.filePath);
+        if (await file.exists()) {
+          entry.hitCount++;
+          entry.lastAccess = DateTime.now();
+          _hitCount++;
+          _notifyStats();
+          return (path: entry.filePath, quality: entry.quality);
+        }
+      }
+    }
+
+    return null;
+  }
+
   // ============================================================
   // 缓存写入
   // ============================================================

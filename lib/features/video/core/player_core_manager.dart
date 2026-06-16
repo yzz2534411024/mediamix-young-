@@ -112,6 +112,7 @@ class PlayerCoreManager extends ChangeNotifier {
   bool _hasTriggeredNextEpisodePreload = false;
   Timer? _speedIndicatorTimer;
   bool _isInBackground = false, _isInPipMode = false;
+  int? _pipSavedQualityIndex;
   PowerMode _powerMode = PowerMode.balanced;
   bool _isLoading = true;
   String _loadingText = '加载中...';
@@ -120,6 +121,7 @@ class PlayerCoreManager extends ChangeNotifier {
 
   // 错误 / 缓存 / 进度保存
   String? _lastError;
+  String? _fallbackQuality;
   String _resolvedUrl = '';
   Timer? _progressSaveTimer;
   AppDatabase? _db;
@@ -160,6 +162,7 @@ class PlayerCoreManager extends ChangeNotifier {
   bool get isWaitingForNetwork => _errorHandler.isWaitingForNetwork;
   String? get lastError => _lastError;
   bool get isUsingCache => _cacheEngine.isUsingCache;
+  String? get fallbackQuality => _fallbackQuality;
   Duration get lastVideoPosition => _lastVideoPosition;
   bool get isInBackground => _isInBackground;
   bool get isInPipMode => _isInPipMode;
@@ -324,7 +327,19 @@ class PlayerCoreManager extends ChangeNotifier {
 
   void enterPipMode() async {
     try {
-      _isInPipMode = true; _logger.d('进入画中画模式，降低分辨率');
+      _isInPipMode = true;
+
+      // PiP 降分辨率：切换到最低清晰度
+      if (_qualityUrls.isNotEmpty && _currentQualityIndex > 0) {
+        _pipSavedQualityIndex = _currentQualityIndex;
+        final lowestIndex = _qualityUrls.length - 1;
+        if (lowestIndex != _currentQualityIndex) {
+          _logger.i('PiP 模式：降低分辨率，切换到 ${_qualityLabels[lowestIndex]}');
+          _currentQualityIndex = lowestIndex;
+          notifyListeners();
+        }
+      }
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('is_background_playing', true);
       await prefs.setString('background_play_url', _url);
@@ -383,9 +398,21 @@ class PlayerCoreManager extends ChangeNotifier {
   // ========================================================================
 
   Future<void> _openVideoWithCacheCheck(String url, String videoId) async {
-    _resolvedUrl = await _cacheEngine.resolveVideoUrl(url, videoId);
+    final result = await _cacheEngine.resolveVideoUrlWithFallback(url, videoId, preferredQuality: _currentQualityLabel);
+    _fallbackQuality = result.fallbackQuality;
+    if (result.fallbackQuality != null) {
+      _logger.i('清晰度降级命中: 请求$_currentQualityLabel，使用${result.fallbackQuality}');
+      // 通知UI显示降级提示
+      onQualityAutoSwitch?.call(QualityAutoSwitchEvent(label: '${result.fallbackQuality}(缓存)'));
+    }
+    _resolvedUrl = result.url;
     _logger.i('播放URL解析完成: ${_cacheEngine.isUsingCache ? "本地缓存" : "网络"}');
     _player.open(Media(_resolvedUrl));
+  }
+
+  String get _currentQualityLabel {
+    if (_qualityLabels.isEmpty || _currentQualityIndex >= _qualityLabels.length) return '720p';
+    return _qualityLabels[_currentQualityIndex];
   }
 
   void _onPreloadNextEpisode(String videoId, String url) { _logger.i('预加载下一集: videoId=$videoId'); onNotifyPreloadBuffering?.call(false); }
@@ -497,8 +524,45 @@ class PlayerCoreManager extends ChangeNotifier {
   // 画中画/后台 / 功耗
   // ========================================================================
 
-  void _onAppBackgrounded() { _isInBackground = true; _logger.d('应用进入后台'); if (!_isInPipMode) _savePlaybackProgress(); notifyListeners(); }
-  void _onAppForegrounded() { if (!_isInBackground) return; _isInBackground = false; _logger.d('应用回到前台'); notifyListeners(); }
+  void _onAppBackgrounded() {
+    _isInBackground = true;
+    _logger.d('应用进入后台，保持音频播放');
+    // 后台优化：降低检测频率
+    _avSyncCheckTimer?.cancel();
+    _avSyncCheckTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      _checkAVSync();
+    });
+    // 降低进度保存频率
+    _progressSaveTimer?.cancel();
+    _progressSaveTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      _savePlaybackProgress();
+    });
+    if (!_isInPipMode) _savePlaybackProgress();
+    notifyListeners();
+  }
+  void _onAppForegrounded() {
+    if (!_isInBackground) return;
+    _isInBackground = false;
+    _logger.d('应用回到前台，恢复视频播放');
+    // 恢复正常检测频率
+    _avSyncCheckTimer?.cancel();
+    _avSyncCheckTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      _checkAVSync();
+    });
+    _progressSaveTimer?.cancel();
+    _progressSaveTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      _savePlaybackProgress();
+    });
+    // PiP 退出时恢复分辨率
+    if (_isInPipMode && _pipSavedQualityIndex != null) {
+      _isInPipMode = false;
+      _currentQualityIndex = _pipSavedQualityIndex!;
+      _pipSavedQualityIndex = null;
+      _logger.i('PiP 退出：恢复原始分辨率');
+      notifyListeners();
+    }
+    notifyListeners();
+  }
 
   Future<void> _detectPowerMode() async {
     try {

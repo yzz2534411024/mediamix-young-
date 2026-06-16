@@ -5,10 +5,30 @@ import '../../../../core/services/power_manager_service.dart' show PowerMode;
 // 引擎接口定义 — 播放器核心引擎的抽象层
 // ============================================================================
 
+/// 缓存解析结果
+class CacheResolveResult {
+  final String url;
+  final bool isUsingCache;
+  /// 降级命中的清晰度（null 表示精确命中或未命中）
+  final String? fallbackQuality;
+
+  const CacheResolveResult({
+    required this.url,
+    required this.isUsingCache,
+    this.fallbackQuality,
+  });
+}
+
 /// 缓存引擎接口
 abstract class CacheEngine {
   /// 解析视频 URL — 优先使用本地缓存，其次走本地代理边播边缓存
   Future<String> resolveVideoUrl(String url, String videoId);
+
+  /// 跨清晰度缓存查找 — 清晰度降级命中
+  ///
+  /// 请求1080p但缓存有720p时，先用720p缓存播放
+  /// 返回解析结果（url, isUsingCache, fallbackQuality）
+  Future<CacheResolveResult> resolveVideoUrlWithFallback(String url, String videoId, {String? preferredQuality});
 
   /// 是否正在使用本地缓存
   bool get isUsingCache;

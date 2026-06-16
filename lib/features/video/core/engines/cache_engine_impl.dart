@@ -64,6 +64,48 @@ class CacheEngineImpl implements CacheEngine {
   }
 
   @override
+  Future<CacheResolveResult> resolveVideoUrlWithFallback(String url, String videoId, {String? preferredQuality}) async {
+    try {
+      // 1. 精确匹配：请求的清晰度有缓存
+      final exactPath = await VideoCacheService.instance.getCachePath(videoId, quality: preferredQuality ?? '720p');
+      if (exactPath != null) {
+        _logger.i('缓存精确命中: $videoId@${preferredQuality ?? "720p"}');
+        _isUsingCache = true;
+        PlayerMetricsService.instance.recordEvent(MetricsEvent.cacheHit);
+        MetricsCollectorService.instance.recordEvent(MetricsEvent.cacheHit);
+        return CacheResolveResult(url: exactPath, isUsingCache: true);
+      }
+
+      // 2. 降级匹配：其他清晰度有缓存
+      final fallback = await VideoCacheService.instance.getAnyQualityCachePath(videoId, preferredQuality: preferredQuality);
+      if (fallback != null) {
+        _logger.i('缓存降级命中: $videoId 请求${preferredQuality ?? "默认"}，使用${fallback.quality}');
+        _isUsingCache = true;
+        PlayerMetricsService.instance.recordEvent(MetricsEvent.cacheHit);
+        MetricsCollectorService.instance.recordEvent(MetricsEvent.cacheHit);
+        return CacheResolveResult(
+          url: fallback.path,
+          isUsingCache: true,
+          fallbackQuality: fallback.quality,
+        );
+      }
+
+      // 3. 未命中：走代理
+      PlayerMetricsService.instance.recordEvent(MetricsEvent.cacheMiss);
+      MetricsCollectorService.instance.recordEvent(MetricsEvent.cacheMiss);
+      _isUsingCache = false;
+
+      await LocalProxyServer.instance.start();
+      final proxyUrl = LocalProxyServer.instance.proxyUrl(url, videoId);
+      return CacheResolveResult(url: proxyUrl, isUsingCache: false);
+    } catch (e) {
+      _logger.w('缓存/代理查询失败，使用网络URL: $e');
+      _isUsingCache = false;
+      return CacheResolveResult(url: url, isUsingCache: false);
+    }
+  }
+
+  @override
   void notifyPreloadBuffering(bool isBuffering) {
     _notifyPreloadBuffering?.call(isBuffering);
   }
