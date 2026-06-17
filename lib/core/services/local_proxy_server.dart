@@ -15,7 +15,7 @@ class LocalProxyServer {
   static LocalProxyServer? _instance;
   static LocalProxyServer get instance => _instance ??= LocalProxyServer._();
 
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
   final Dio _dio = _createDio();
 
   HttpServer? _server;

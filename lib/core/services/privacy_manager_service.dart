@@ -54,7 +54,7 @@ class PrivacyManagerService {
 
   PrivacyManagerService._();
 
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
 
   // SharedPreferences 键名
   static const _keyMetricsEnabled = 'privacy_metrics_enabled';

@@ -178,7 +178,7 @@ class PreloadStrategy {
 /// 根据用户行为上下文和网络条件，智能地预加载视频内容，
 /// 控制并发数和带宽占用，不干扰当前播放下载。
 class PreloadService {
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
   final Dio _dio = PreloadService._createDio();
 
   static Dio _createDio() {

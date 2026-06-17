@@ -55,7 +55,7 @@ class BufferWaterLines {
 
 /// 缓冲区管理器 — 监控缓冲状态，动态调整水位线
 class BufferManager {
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
 
   BufferWaterLines _waterLines = BufferWaterLines.wifi;
   Duration _currentBuffer = Duration.zero;
@@ -118,7 +118,7 @@ class BufferManager {
 ///
 /// 由于当前应用没有多码率流，实现为网络质量指示器 + 画质偏好管理
 class ABRController {
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
 
   double _currentBandwidthKbps = 0;
   Duration _currentBuffer = Duration.zero;

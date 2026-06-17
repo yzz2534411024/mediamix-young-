@@ -241,7 +241,7 @@ class PlayerMetricsService {
 
   PlayerMetricsService._();
 
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
 
   /// 当前活跃会话状态
   _SessionState? _currentSession;

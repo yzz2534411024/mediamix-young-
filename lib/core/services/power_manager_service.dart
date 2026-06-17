@@ -114,7 +114,7 @@ class PowerManagerService {
   /// 获取单例实例
   static PowerManagerService get instance => _instance;
 
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
 
   /// 电池信息 MethodChannel
   static const MethodChannel _batteryChannel =

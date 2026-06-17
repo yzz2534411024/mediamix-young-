@@ -7,7 +7,7 @@ import 'engine_interfaces.dart';
 import 'package:logger/logger.dart';
 
 class CacheEngineImpl implements CacheEngine {
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
 
   bool _isUsingCache = false;
 

@@ -27,7 +27,7 @@ class CacheService {
   /// 内存缓存
   final Map<String, _CacheEntry> _memoryCache = {};
 
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
 
   /// 保存缓存到内存和本地文件
   Future<void> saveCache(String key, Map<String, dynamic> data) async {

@@ -46,7 +46,7 @@ class DataReporterService {
 
   DataReporterService._();
 
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
 
   /// 数据库实例（由 initialize 注入）
   AppDatabase? _db;

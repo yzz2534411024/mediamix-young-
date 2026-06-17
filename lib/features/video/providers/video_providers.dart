@@ -15,7 +15,7 @@ import '../../../core/services/data_reporter_service.dart';
 import '../../../core/network/network_engine.dart' hide CacheStats;
 import 'package:logger/logger.dart';
 
-final _logger = Logger(printer: const SimplePrinter());
+final _logger = Logger(printer: SimplePrinter());
 
 // ===== API 服务 Provider =====
 final videoApiServiceProvider = Provider<VideoApiService>((ref) => VideoApiService());

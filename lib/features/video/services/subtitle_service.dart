@@ -91,7 +91,7 @@ class _SubtitleLRUCache {
 /// 字幕服务 — 负责加载和解析 SRT 字幕
 class SubtitleService {
   final Dio _dio;
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
 
   /// LRU 字幕缓存，最大 20 条
   final _SubtitleLRUCache _subtitleCache = _SubtitleLRUCache(maxEntries: 20);

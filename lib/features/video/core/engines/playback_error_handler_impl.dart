@@ -13,7 +13,7 @@ import 'engine_interfaces.dart';
 /// 负责播放错误的分类、重试、清晰度降级、弱网自动重连等策略。
 /// 从 PlayerCoreManager 的优化12（错误处理增强 + 弱网自动重连）中提取。
 class PlaybackErrorHandlerImpl implements PlaybackErrorHandler {
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
 
   // ========== 重试逻辑 ==========
   /// 当前重试计数

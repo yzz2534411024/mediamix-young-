@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show AppLifecycleState;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:media_kit/media_kit.dart' hide SubtitleTrack;
@@ -47,7 +48,7 @@ class QualityAutoSwitchEvent { final String label; QualityAutoSwitchEvent(this.l
 /// 播放器核心管理器 — 缓存/错误/指标委托给引擎
 class PlayerCoreManager extends ChangeNotifier {
   // Fix 4: 使用 SimplePrinter 替代 PrettyPrinter，避免主线程卡顿
-  final Logger _logger = Logger(printer: const SimplePrinter());
+  final Logger _logger = Logger(printer: SimplePrinter());
 
   late final Player _player;
   late final VideoController _controller;
@@ -467,7 +468,7 @@ class PlayerCoreManager extends ChangeNotifier {
       _fallbackQuality = result.fallbackQuality;
       if (result.fallbackQuality != null) {
         _logger.i('清晰度降级命中: 请求$_currentQualityLabel，使用${result.fallbackQuality}');
-        onQualityAutoSwitch?.call(QualityAutoSwitchEvent(label: '${result.fallbackQuality}(缓存)'));
+        onQualityAutoSwitch?.call(QualityAutoSwitchEvent('${result.fallbackQuality}(缓存)'));
       }
       _resolvedUrl = result.url;
       _logger.i('播放URL解析完成: ${_cacheEngine.isUsingCache ? "本地缓存" : "网络"}');

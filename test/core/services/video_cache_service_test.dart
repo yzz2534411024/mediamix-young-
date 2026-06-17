@@ -347,7 +347,7 @@ void main() {
       // 模拟 80 次命中 + 20 次未命中 = 0.8
       const hitCount = 80;
       const missCount = 20;
-      final total = hitCount + missCount;
+      const total = hitCount + missCount;
       final hitRate = hitCount / total;
 
       final stats = CacheStats(
