@@ -39,7 +39,7 @@ class _VideoHomePageState extends ConsumerState<VideoHomePage> {
     final listState = ref.read(videoListProvider).valueOrNull;
     if (listState == null) return;
     final remainingItems = listState.items.length - (_scrollController.position.pixels / 200).floor();
-    final threshold = 20;
+    const threshold = 20;
     if (remainingItems < threshold && listState.hasMore && !listState.isLoadingMore) {
       ref.read(videoListProvider.notifier).loadMore();
     }

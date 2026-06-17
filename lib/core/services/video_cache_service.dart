@@ -208,8 +208,7 @@ class _MemoryCacheEntry {
     required this.quality,
     required this.frameBuffer,
     DateTime? lastAccess,
-    this.hitCount = 0,
-  }) : lastAccess = lastAccess ?? DateTime.now();
+  }) : hitCount = 0, lastAccess = lastAccess ?? DateTime.now();
 }
 
 /// L2 内存缓存条目 — 原始流数据
@@ -238,8 +237,7 @@ class _StreamCacheEntry {
     required this.quality,
     required this.data,
     DateTime? lastAccess,
-    this.hitCount = 0,
-  }) : lastAccess = lastAccess ?? DateTime.now();
+  }) : hitCount = 0, lastAccess = lastAccess ?? DateTime.now();
 }
 
 // ============================================================

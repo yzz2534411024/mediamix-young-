@@ -90,7 +90,7 @@ class DownloadService {
       }
 
       // 生成文件名（清理非法字符）
-      final safeName = '${vodName}_${episodeName}'.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
+      final safeName = '${vodName}_$episodeName'.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_');
       final filePath = p.join(downloadDir.path, '$safeName.mp4');
 
       await _dio.download(
@@ -117,7 +117,7 @@ class DownloadService {
       await db.updateDownloadTask(DownloadTasksCompanion(
         id: Value(taskId),
         status: Value(DownloadStatus.completed.index),
-        progress: Value(100),
+        progress: const Value(100),
         localPath: Value(filePath),
       ));
 

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/database/database.dart';
-import '../../../core/database/database_provider.dart';
 import '../../../core/services/download_service.dart';
 import '../../video/providers/video_providers.dart';
 

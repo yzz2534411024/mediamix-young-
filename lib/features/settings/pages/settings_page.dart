@@ -65,7 +65,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       body: ListView(
         children: [
           // 数据源管理
-          _SectionHeader(title: '数据源'),
+          const _SectionHeader(title: '数据源'),
           ListTile(
             leading: const Icon(Icons.source),
             title: const Text('数据源管理'),
@@ -75,7 +75,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           const Divider(),
           // 通用设置
-          _SectionHeader(title: '通用'),
+          const _SectionHeader(title: '通用'),
           ListTile(
             leading: const Icon(Icons.download),
             title: const Text('下载管理'),
@@ -104,7 +104,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           const Divider(),
           // 隐私与数据
-          _SectionHeader(title: '隐私与数据'),
+          const _SectionHeader(title: '隐私与数据'),
           SwitchListTile(
             secondary: Icon(
               _metricsEnabled ? Icons.analytics : Icons.analytics_outlined,

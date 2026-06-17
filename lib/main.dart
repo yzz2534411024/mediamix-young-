@@ -10,7 +10,6 @@ import 'core/services/power_manager_service.dart';
 import 'core/services/privacy_manager_service.dart';
 import 'core/services/metrics_collector_service.dart';
 import 'core/services/data_reporter_service.dart';
-import 'core/database/database_provider.dart';
 import 'core/database/database.dart';
 import 'core/network/network_engine.dart';
 import 'core/network/proxy_config_service.dart';

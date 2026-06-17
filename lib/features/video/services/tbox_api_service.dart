@@ -632,7 +632,7 @@ class _RetryInterceptor extends Interceptor {
   // 指数退避基础延迟：500ms, 1000ms, 2000ms
   static const List<int> _retryDelays = [500, 1000, 2000];
 
-  _RetryInterceptor({required this.dio, this.maxRetries = 3});
+  _RetryInterceptor({required this.dio}) : maxRetries = 3;
 
   @override
   Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {

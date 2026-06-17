@@ -357,7 +357,7 @@ void main() {
       const path = '/cache/video_高清.mp4';
 
       // 模拟返回记录
-      final record = (path: path, quality: quality);
+      const record = (path: path, quality: quality);
       expect(record.$1, equals(path));
       expect(record.$2, equals(quality));
       expect(record.path, equals(path));

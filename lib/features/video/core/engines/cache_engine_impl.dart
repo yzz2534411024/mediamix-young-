@@ -2,7 +2,6 @@ import '../../../../core/services/video_cache_service.dart';
 import '../../../../core/services/player_metrics_service.dart';
 import '../../../../core/services/metrics_collector_service.dart';
 import '../../../../core/services/local_proxy_server.dart';
-import '../../../../core/network/network_engine.dart';
 import '../../../../core/services/power_manager_service.dart';
 import 'engine_interfaces.dart';
 import 'package:logger/logger.dart';

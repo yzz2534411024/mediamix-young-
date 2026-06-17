@@ -242,7 +242,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
       builder: (ctx) => AlertDialog(
         title: const Text('播放错误'),
         content: Text(
-          '播放遇到问题$triedInfo：${event.message.length > 100 ? event.message.substring(0, 100) + '...' : event.message}',
+          '播放遇到问题$triedInfo：${event.message.length > 100 ? '${event.message.substring(0, 100)}...' : event.message}',
         ),
         actions: [
           TextButton(
@@ -585,7 +585,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
                 else
                   const SizedBox(width: 18),
                 const SizedBox(width: 8),
-                Text('${interval}秒'),
+                Text('$interval秒'),
               ],
             ),
           );
@@ -762,7 +762,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     if (_isFullscreen) {
       _toggleFullscreen();
     }
-    await _manager.enterPipMode();
+    _manager.enterPipMode();
     if (mounted) {
       ScaffoldMessenger.of(context).clearSnackBars();
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1141,7 +1141,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
           builder: (_, durationSnapshot) {
             final duration = durationSnapshot.data ?? Duration.zero;
             final maxMs = duration.inMilliseconds.toDouble();
-            final valueMs = position.inMilliseconds.toDouble().clamp(0.0, maxMs) as double;
+            final valueMs = position.inMilliseconds.toDouble().clamp(0.0, maxMs);
 
             return StreamBuilder<Duration>(
               stream: _manager.player.stream.buffer,
@@ -1165,10 +1165,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
                               alignment: Alignment.center,
                               children: [
                                 SliderTheme(
-                                  data: SliderThemeData(
+                                  data: const SliderThemeData(
                                     trackHeight: 3,
-                                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-                                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                                    thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6),
+                                    overlayShape: RoundSliderOverlayShape(overlayRadius: 12),
                                     activeTrackColor: Colors.white,
                                     inactiveTrackColor: Colors.white24,
                                     thumbColor: Colors.white,
@@ -1252,7 +1252,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
             _showSkipIntervalSelector();
           },
           child: IconButton(
-            icon: Icon(Icons.replay, color: Colors.white, size: 32),
+            icon: const Icon(Icons.replay, color: Colors.white, size: 32),
             onPressed: () {
               final pos = _manager.player.state.position;
               _manager.fastSeek(pos - Duration(seconds: _manager.skipInterval));
@@ -1288,7 +1288,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
             _showSkipIntervalSelector();
           },
           child: IconButton(
-            icon: Icon(Icons.forward_30, color: Colors.white, size: 32),
+            icon: const Icon(Icons.forward_30, color: Colors.white, size: 32),
             onPressed: () {
               final pos = _manager.player.state.position;
               _manager.fastSeek(pos + Duration(seconds: _manager.skipInterval));

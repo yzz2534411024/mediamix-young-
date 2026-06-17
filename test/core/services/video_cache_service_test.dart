@@ -345,8 +345,8 @@ void main() {
 
     test('hitRate 介于 0 和 1 之间', () {
       // 模拟 80 次命中 + 20 次未命中 = 0.8
-      final hitCount = 80;
-      final missCount = 20;
+      const hitCount = 80;
+      const missCount = 20;
       final total = hitCount + missCount;
       final hitRate = hitCount / total;
 

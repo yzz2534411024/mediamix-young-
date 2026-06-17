@@ -300,10 +300,14 @@ class PlayerCoreManager extends ChangeNotifier {
     _savePlaybackProgress();
 
     // 先取消所有定时器
-    for (final t in [_progressSaveTimer, _seekOverlayTimer, _speedIndicatorTimer, _avSyncCheckTimer]) t?.cancel();
+    for (final t in [_progressSaveTimer, _seekOverlayTimer, _speedIndicatorTimer, _avSyncCheckTimer]) {
+      t?.cancel();
+    }
 
     // 先取消所有流订阅（防止回调访问已释放的 Player）
-    for (final s in [_completedSubscription, _positionSubscription, _bufferSubscription, _errorSubscription, _playingSubscription, _networkConditionSubscription]) s?.cancel();
+    for (final s in [_completedSubscription, _positionSubscription, _bufferSubscription, _errorSubscription, _playingSubscription, _networkConditionSubscription]) {
+      s?.cancel();
+    }
 
     // 释放引擎
     _cacheEngine.dispose();
@@ -414,7 +418,7 @@ class PlayerCoreManager extends ChangeNotifier {
     _errorHandler.resetRetryCount();
     _errorHandler.clearTriedQualityIndices();
     _lastError = null;
-    _openVideoWithCacheCheck(_url, '${_title}_${_currentEpisodeIndex}');
+    _openVideoWithCacheCheck(_url, '${_title}_$_currentEpisodeIndex');
     notifyListeners();
   }
 
@@ -503,7 +507,7 @@ class PlayerCoreManager extends ChangeNotifier {
     _player.stop();
     Future.delayed(const Duration(milliseconds: 300), () {
       if (_isDisposed) return; // Fix 3: 防止 use-after-dispose
-      _openVideoWithCacheCheck(_url, '${_title}_${_currentEpisodeIndex}');
+      _openVideoWithCacheCheck(_url, '${_title}_$_currentEpisodeIndex');
     });
   }
 
@@ -548,18 +552,18 @@ class PlayerCoreManager extends ChangeNotifier {
     if (driftMs < 50) return;
 
     final frames = driftMs ~/ 33;
-    _logger.d('音视频偏移: ${drift.inMilliseconds}ms (~${frames}帧)');
+    _logger.d('音视频偏移: ${drift.inMilliseconds}ms (~$frames帧)');
     _metricsEngine.recordEvent(MetricsEvent.playError, avSyncOffsetMs: driftMs);
 
     if (driftMs > 2000) {
-      _logger.w('视频严重偏离(${driftMs}ms / ~${frames}帧)，跳帧纠正');
+      _logger.w('视频严重偏离(${driftMs}ms / ~$frames帧)，跳帧纠正');
       _player.seek(drift.isNegative ? expected : actual);
       _avSyncCorrectionCount++; _lastAVSyncCorrection = now;
     } else if (driftMs > 500) {
       _logger.w('音视频偏移过大(${driftMs}ms)，Seek纠正');
       _player.seek(expected); _avSyncCorrectionCount++; _lastAVSyncCorrection = now;
     } else if (frames > 5) {
-      _logger.w('帧堆积${frames}帧(${driftMs}ms)，跳帧到当前');
+      _logger.w('帧堆积$frames帧(${driftMs}ms)，跳帧到当前');
       _player.seek(expected); _avSyncCorrectionCount++; _lastAVSyncCorrection = now;
     } else {
       final rate = drift.isNegative ? _playbackSpeed * 1.05 : _playbackSpeed * 0.95;
@@ -679,7 +683,7 @@ class PlayerCoreManager extends ChangeNotifier {
       case ErrorAction.waitForNetworkRecovery:
         _logger.w('网络原因导致播放中断，等待恢复'); _errorHandler.startNetworkRecoveryMonitoring(onNetworkRecovered: _attemptReconnect); notifyListeners();
       case ErrorAction.retrySameUrl:
-        _openVideoWithCacheCheck(_url, '${_title}_${_currentEpisodeIndex}');
+        _openVideoWithCacheCheck(_url, '${_title}_$_currentEpisodeIndex');
       case ErrorAction.switchToNextQuality:
         final idx = result.nextQualityIndex!;
         _logger.i('降级切换清晰度: ${_qualityLabels[_currentEpisodeIndex]} → ${_qualityLabels[idx]}');
@@ -695,7 +699,7 @@ class PlayerCoreManager extends ChangeNotifier {
     if (_isDisposed) return;
     final pos = _player.state.position;
     _logger.i('自动重连 — 断点: ${pos.inSeconds}s');
-    _openVideoWithCacheCheck(_url, '${_title}_${_currentEpisodeIndex}');
+    _openVideoWithCacheCheck(_url, '${_title}_$_currentEpisodeIndex');
     Future.delayed(const Duration(milliseconds: 500), () {
       if (_isDisposed) return; // Fix 3: 防止 use-after-dispose
       if (_player.state.playing || _player.state.position > Duration.zero) { _player.seek(pos); _logger.i('已恢复断点'); }
@@ -724,8 +728,9 @@ class PlayerCoreManager extends ChangeNotifier {
     switch (_playMode) {
       case PlayMode.loopSingle: _player.seek(Duration.zero); _player.play();
       case PlayMode.loopAll:
-        if (hasNextEpisode) playNextEpisode();
-        else if (_episodeUrls != null && _episodeUrls!.isNotEmpty) _playEpisodeAtIndex(0);
+        if (hasNextEpisode) {
+          playNextEpisode();
+        } else if (_episodeUrls != null && _episodeUrls!.isNotEmpty) _playEpisodeAtIndex(0);
         else { _player.seek(Duration.zero); _player.play(); }
       case PlayMode.sequential: if (hasNextEpisode) playNextEpisode();
     }

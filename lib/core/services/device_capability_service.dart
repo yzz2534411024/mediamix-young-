@@ -138,7 +138,7 @@ class DeviceCapabilityService {
     }
 
     _logger.i('设备能力探测完成: $platform, $cpuArch, ${totalRamMB}MB RAM, '
-        '${cpuCores}核, 低端设备=$isLowEndDevice');
+        '$cpuCores核, 低端设备=$isLowEndDevice');
 
     return DeviceCapabilityReport(
       platform: platform,
@@ -220,7 +220,7 @@ class DeviceCapabilityService {
           maxHeight: 1080,
           hardwareDecodingSupported: !isLowEnd,
         ),
-        CodecCapability(
+        const CodecCapability(
           codec: 'H.265',
           maxWidth: 3840,
           maxHeight: 2160,
@@ -232,7 +232,7 @@ class DeviceCapabilityService {
           maxHeight: 1080,
           hardwareDecodingSupported: true, // Android 4.3+ 普遍支持
         ),
-        CodecCapability(
+        const CodecCapability(
           codec: 'AV1',
           maxWidth: 1920,
           maxHeight: 1080,
@@ -302,15 +302,15 @@ class DeviceCapabilityService {
     required int width,
     required int height,
   }) async {
-    _logger.w('硬解码失败记录: $codec ${width}x${height}');
+    _logger.w('硬解码失败记录: $codec ${width}x$height');
     final prefs = await SharedPreferences.getInstance();
-    final key = 'hwdec_failure_${codec}_${width}x${height}';
+    final key = 'hwdec_failure_${codec}_${width}x$height';
     final count = (prefs.getInt(key) ?? 0) + 1;
     await prefs.setInt(key, count);
 
     // 失败超过 3 次则标记为该组合不支持硬解
     if (count >= 3) {
-      _logger.w('$codec ${width}x${height} 已标记为不支持硬解码');
+      _logger.w('$codec ${width}x$height 已标记为不支持硬解码');
     }
   }
 
@@ -321,7 +321,7 @@ class DeviceCapabilityService {
     required int height,
   }) async {
     final prefs = await SharedPreferences.getInstance();
-    final key = 'hwdec_failure_${codec}_${width}x${height}';
+    final key = 'hwdec_failure_${codec}_${width}x$height';
     final count = prefs.getInt(key) ?? 0;
     return count >= 3;
   }
