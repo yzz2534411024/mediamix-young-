@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:share_plus/share_plus.dart';
 import '../../video/providers/video_providers.dart';
-import '../../video/models/video_models.dart';
 import '../../../core/services/theme_provider.dart';
 import '../../../core/services/privacy_manager_service.dart';
 import '../../../core/services/data_reporter_service.dart';
