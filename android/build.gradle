@@ -10,11 +10,18 @@ allprojects {
 rootProject.buildDir = "../build"
 subprojects {
     project.buildDir = "${rootProject.buildDir}/${project.name}"
-    // 为所有子项目统一设置 compileSdk，解决 package_info_plus 等插件的兼容性问题
+    // 统一设置子项目的 compileSdk 和 Java 版本
     afterEvaluate {
         if (project.hasProperty('android')) {
             project.android {
                 compileSdk = 36
+                compileOptions {
+                    sourceCompatibility = JavaVersion.VERSION_17
+                    targetCompatibility = JavaVersion.VERSION_17
+                }
+                kotlinOptions {
+                    jvmTarget = "17"
+                }
             }
         }
     }
