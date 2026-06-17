@@ -245,6 +245,14 @@ class PlayerCoreManager extends ChangeNotifier {
       _checkPreloadTrigger(pos);
     });
 
+    // 兜底：播放器可能在订阅注册前就已经处于播放状态，主动补记首帧
+    if (!_metricsEngine.hasRecordedFirstFrame && _player.state.position > Duration.zero) {
+      _metricsEngine.markFirstFrameRecorded();
+      _metricsEngine.recordEvent(MetricsEvent.firstFrame);
+      _notifyFirstFrame();
+      _loadSubtitles();
+    }
+
     _bufferSubscription = _player.stream.buffer.listen((buf) {
       _bufferManager.updateBuffer(buf);
       _abrController.updateBuffer(buf);
@@ -553,11 +561,10 @@ class PlayerCoreManager extends ChangeNotifier {
     if (driftMs < 50) return;
 
     final frames = driftMs ~/ 33;
-    _logger.d('音视频偏移: ${drift.inMilliseconds}ms (~$frames帧)');
-    _metricsEngine.recordEvent(MetricsEvent.playError, avSyncOffsetMs: driftMs);
 
     if (driftMs > 2000) {
       _logger.w('视频严重偏离(${driftMs}ms / ~$frames帧)，跳帧纠正');
+      _metricsEngine.recordEvent(MetricsEvent.playError, avSyncOffsetMs: driftMs);
       _player.seek(drift.isNegative ? expected : actual);
       _avSyncCorrectionCount++; _lastAVSyncCorrection = now;
     } else if (driftMs > 500) {
@@ -567,10 +574,11 @@ class PlayerCoreManager extends ChangeNotifier {
       _logger.w('帧堆积$frames帧(${driftMs}ms)，跳帧到当前');
       _player.seek(expected); _avSyncCorrectionCount++; _lastAVSyncCorrection = now;
     } else {
+      _logger.d('音视频微调: ${drift.inMilliseconds}ms (~$frames帧)');
       final rate = drift.isNegative ? _playbackSpeed * 1.05 : _playbackSpeed * 0.95;
       _player.setRate(rate);
       Future.delayed(const Duration(milliseconds: 600), () {
-        if (_isDisposed) return; // Fix 3: 防止 use-after-dispose
+        if (_isDisposed) return;
         if (_player.state.playing) _player.setRate(_playbackSpeed);
       });
     }

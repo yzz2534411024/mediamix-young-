@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:logger/logger.dart';
-import '../network/network_engine.dart' show BandwidthEstimator;
+import '../network/network_engine.dart' show NetworkEngine;
 
 // ============================================================================
 // 播放性能监控指标服务
@@ -249,9 +249,6 @@ class PlayerMetricsService {
   /// 当前会话的指标数据
   PlaybackMetrics? _currentMetrics;
 
-  /// 带宽估计器
-  final BandwidthEstimator _bandwidthEstimator = BandwidthEstimator();
-
   /// 告警阈值配置
   AlertThresholds _alertThresholds = const AlertThresholds();
 
@@ -277,7 +274,7 @@ class PlayerMetricsService {
   String? get currentSessionId => _currentSession?.sessionId;
 
   /// 当前带宽估计值（kbps）
-  double get currentBandwidthEstimate => _bandwidthEstimator.estimateBandwidth();
+  double get currentBandwidthEstimate => NetworkEngine.instance.estimateBandwidth();
 
   /// 更新告警阈值配置
   void setAlertThresholds(AlertThresholds thresholds) {
@@ -303,7 +300,6 @@ class PlayerMetricsService {
       sessionId: sessionId,
       startTime: DateTime.now(),
     );
-    _bandwidthEstimator.reset();
 
     _logger.i('播放监控会话已创建: sessionId=$sessionId, videoId=$videoId');
     return sessionId;
@@ -389,11 +385,10 @@ class PlayerMetricsService {
         break;
     }
 
-    // 处理带宽采样
+    // 处理带宽采样（来自 NetworkEngine 的全局 Dio 拦截器持续追踪）
     if (bytesDownloaded != null && downloadDurationMs != null) {
-      _bandwidthEstimator.addSample(bytesDownloaded, downloadDurationMs);
-      _currentMetrics!.avgBandwidthKbps = _bandwidthEstimator.estimateBandwidth();
-      _currentMetrics!.peakBandwidthKbps = _bandwidthEstimator.peak;
+      _currentMetrics!.avgBandwidthKbps = NetworkEngine.instance.estimateBandwidth();
+      _currentMetrics!.peakBandwidthKbps = NetworkEngine.instance.peakBandwidthKbps;
     }
 
     // 记录音视频同步偏移
@@ -522,9 +517,9 @@ class PlayerMetricsService {
           seekLatencies.reduce((a, b) => a + b) ~/ seekLatencies.length;
     }
 
-    // 带宽估计
-    _currentMetrics!.avgBandwidthKbps = _bandwidthEstimator.estimateBandwidth();
-    _currentMetrics!.peakBandwidthKbps = _bandwidthEstimator.peak;
+    // 带宽估计 — 来自 NetworkEngine 全局采样（Dio拦截器持续追踪）
+    _currentMetrics!.avgBandwidthKbps = NetworkEngine.instance.estimateBandwidth();
+    _currentMetrics!.peakBandwidthKbps = NetworkEngine.instance.peakBandwidthKbps;
   }
 
   // ==========================================================================

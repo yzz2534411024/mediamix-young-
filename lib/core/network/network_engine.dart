@@ -293,6 +293,9 @@ class NetworkEngine {
   /// 当前估算带宽（Kbps）
   double get currentBandwidthKbps => _bandwidthEstimator.currentBandwidthKbps;
 
+  /// 峰值带宽（Kbps）
+  double get peakBandwidthKbps => _bandwidthEstimator.peak;
+
   /// 获取带宽估算值
   double estimateBandwidth() => _bandwidthEstimator.estimateBandwidth();
 
