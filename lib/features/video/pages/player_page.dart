@@ -2,8 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:media_kit/media_kit.dart'
-    hide SubtitleTrack; // 与自定义 SubtitleTrack 冲突，使用自定义版本
+// 与自定义 SubtitleTrack 冲突，使用自定义版本
 import 'package:media_kit_video/media_kit_video.dart';
 import '../../../core/database/database_provider.dart';
 import '../../../core/network/network_engine.dart';
