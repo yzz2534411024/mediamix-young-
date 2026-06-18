@@ -130,6 +130,7 @@ class PlayerCoreManager extends ChangeNotifier {
   String? _fallbackQuality;
   String _resolvedUrl = '';
   Timer? _progressSaveTimer;
+  Timer? _firstFrameTimeout;
   AppDatabase? _db;
 
   // ========================================================================
@@ -181,6 +182,21 @@ class PlayerCoreManager extends ChangeNotifier {
   // 初始化与销毁
   // ========================================================================
 
+  /// 同步创建 Player 和 VideoController（轻量，供页面立即使用 controller）
+  void initPlayerSync() {
+    // vo: 'gpu' 修复默认值 'null' 导致无视频输出的问题
+    _player = Player(configuration: const PlayerConfiguration(title: '', vo: 'gpu'));
+    _controller = VideoController(_player);
+    // 引擎也在此同步创建
+    _cacheEngine = CacheEngineImpl(
+      onPreloadNextEpisode: _onPreloadNextEpisode,
+      onPreloadAdjacent: _onPreloadAdjacent,
+      onNotifyPreloadBuffering: (b) => onNotifyPreloadBuffering?.call(b),
+    );
+    _errorHandler = PlaybackErrorHandlerImpl();
+    _metricsEngine = MetricsEngineImpl();
+  }
+
   /// Fix 1: initialize 改为异步，确保初始化顺序正确
   Future<void> initialize({
     required String url, required String title, int? episodeIndex,
@@ -191,20 +207,7 @@ class PlayerCoreManager extends ChangeNotifier {
     _url = url; _title = title; _episodeNames = episodeNames;
     _episodeUrls = episodeUrls; _subtitleUrls = subtitleUrls; _db = db;
 
-    // 1. 创建播放器实例
-    _player = Player(configuration: const PlayerConfiguration(title: ''));
-    _controller = VideoController(_player);
-
-    // 2. 创建引擎
-    _cacheEngine = CacheEngineImpl(
-      onPreloadNextEpisode: _onPreloadNextEpisode,
-      onPreloadAdjacent: _onPreloadAdjacent,
-      onNotifyPreloadBuffering: (b) => onNotifyPreloadBuffering?.call(b),
-    );
-    _errorHandler = PlaybackErrorHandlerImpl();
-    _metricsEngine = MetricsEngineImpl();
-
-    // 3. 设备探测 — await 确保完成后再继续
+    // 设备探测 — await 确保完成后再继续
     await _configureHardwareDecoding();
 
     // 4. 设置回调
@@ -292,6 +295,19 @@ class PlayerCoreManager extends ChangeNotifier {
     _progressSaveTimer = Timer.periodic(const Duration(seconds: 10), (_) => _savePlaybackProgress());
     _avSyncCheckTimer = Timer.periodic(const Duration(seconds: 2), (_) => _checkAVSync());
 
+    // 首帧超时兜底：10秒后仍无首帧，尝试绕过本地代理直接用原始URL重试
+    _firstFrameTimeout = Timer(const Duration(seconds: 10), () {
+      if (_isDisposed) return;
+      if (!_metricsEngine.hasRecordedFirstFrame && _url.isNotEmpty) {
+        _logger.w('首帧超时（10s），可能编解码不兼容，尝试绕过本地代理重试');
+        _player.stop();
+        Future.delayed(const Duration(milliseconds: 300), () {
+          if (_isDisposed) return;
+          _player.open(Media(_url));
+        });
+      }
+    });
+
     // 异步初始化（不阻塞，但安全）
     _loadSkipInterval();
     _detectPowerMode();
@@ -309,7 +325,7 @@ class PlayerCoreManager extends ChangeNotifier {
     _savePlaybackProgress();
 
     // 先取消所有定时器
-    for (final t in [_progressSaveTimer, _seekOverlayTimer, _speedIndicatorTimer, _avSyncCheckTimer]) {
+    for (final t in [_progressSaveTimer, _firstFrameTimeout, _seekOverlayTimer, _speedIndicatorTimer, _avSyncCheckTimer]) {
       t?.cancel();
     }
 
@@ -480,11 +496,11 @@ class PlayerCoreManager extends ChangeNotifier {
       }
       _resolvedUrl = result.url;
       _logger.i('播放URL解析完成: ${_cacheEngine.isUsingCache ? "本地缓存" : "网络"}');
-      _player.open(Media(_resolvedUrl));
+      await _player.open(Media(_resolvedUrl));
     } catch (e) {
       _logger.w('视频URL解析失败，使用原始URL: $e');
       _resolvedUrl = url;
-      _player.open(Media(url));
+      await _player.open(Media(url));
     }
   }
 

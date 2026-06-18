@@ -75,36 +75,40 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     _manager.onSubtitlesLoaded = _onSubtitlesLoaded;
     _manager.onNotifyPreloadBuffering = _onNotifyPreloadBuffering;
 
-    // 初始化核心管理器（异步，确保初始化顺序正确）
+    // Phase 1: 同步创建 Player + VideoController（让 Video 组件立即可用）
+    _manager.initPlayerSync();
+
+    // Phase 2: 延后到首帧之后再执行耗时初始化（设备探测、URL加载、流订阅）
     final db = ref.read(databaseProvider);
-    _manager.initialize(
-      url: widget.url,
-      title: widget.title,
-      episodeIndex: widget.episodeIndex,
-      episodeNames: widget.episodeNames,
-      episodeUrls: widget.episodeUrls,
-      qualityLabels: widget.qualityLabels,
-      qualityUrls: widget.qualityUrls,
-      subtitleUrls: widget.subtitleUrls,
-      db: db,
-    ).then((_) {
-      // 初始化完成后再查询进度和预加载
-      if (mounted) {
-        _checkAndResumeProgress();
-        _manager.preloadAdjacentEpisodes();
-      }
-    }).catchError((e) {
-      // 初始化失败时显示错误
-      if (mounted) {
-        ScaffoldMessenger.of(context).clearSnackBars();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('播放器初始化失败: $e'),
-            duration: const Duration(seconds: 3),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _manager.initialize(
+        url: widget.url,
+        title: widget.title,
+        episodeIndex: widget.episodeIndex,
+        episodeNames: widget.episodeNames,
+        episodeUrls: widget.episodeUrls,
+        qualityLabels: widget.qualityLabels,
+        qualityUrls: widget.qualityUrls,
+        subtitleUrls: widget.subtitleUrls,
+        db: db,
+      ).then((_) {
+        if (mounted) {
+          _checkAndResumeProgress();
+          _manager.preloadAdjacentEpisodes();
+        }
+      }).catchError((e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).clearSnackBars();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('播放器初始化失败: $e'),
+              duration: const Duration(seconds: 3),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+        }
+      });
     });
 
     // 初始显示控制栏，5秒后自动隐藏
