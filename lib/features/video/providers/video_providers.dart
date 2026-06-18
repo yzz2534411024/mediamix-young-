@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:drift/drift.dart' show Value;
 import '../models/video_models.dart';
 import '../services/tbox_api_service.dart';
+import '../services/spider/spider_service.dart';
+import '../services/spider/tvbox_config_parser.dart';
 import '../../../core/database/database.dart' hide VideoSource;
 import '../../../core/database/database_provider.dart';
 import '../../../core/services/player_metrics_service.dart';
@@ -19,6 +21,17 @@ final _logger = Logger(printer: SimplePrinter());
 
 // ===== API 服务 Provider =====
 final videoApiServiceProvider = Provider<VideoApiService>((ref) => VideoApiService());
+
+final spiderServiceProvider = Provider<SpiderService>((ref) {
+  final service = SpiderService();
+  ref.onDispose(() => service.disposeAll());
+  return service;
+});
+
+final tvboxConfigProvider = FutureProvider.family<TvBoxConfig, String>((ref, configUrl) async {
+  final service = ref.read(spiderServiceProvider);
+  return service.fetchTvBoxConfig(configUrl);
+});
 
 // ===== 站点列表 Provider =====
 final cmsSiteListProvider = StateProvider<List<CmsApiSite>>((ref) => CmsApiSite.defaultSites.toList());
