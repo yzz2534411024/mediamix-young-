@@ -131,6 +131,65 @@ class CmsApiSite {
   ];
 }
 
+/// 视频源类型
+enum SourceType { cms, spider }
+
+/// 视频源（CMS 或 Spider）
+class VideoSource {
+  final String key;
+  final String name;
+  final String apiUrl;
+  final bool enabled;
+  final bool isBuiltIn;
+  final SourceType sourceType;
+  final String? spiderKey;
+  final String? playerType;
+
+  const VideoSource({
+    required this.key,
+    required this.name,
+    required this.apiUrl,
+    this.enabled = true,
+    this.isBuiltIn = false,
+    this.sourceType = SourceType.cms,
+    this.spiderKey,
+    this.playerType,
+  });
+
+  VideoSource copyWith({
+    String? key,
+    String? name,
+    String? apiUrl,
+    bool? enabled,
+    bool? isBuiltIn,
+    SourceType? sourceType,
+    String? spiderKey,
+    String? playerType,
+  }) {
+    return VideoSource(
+      key: key ?? this.key,
+      name: name ?? this.name,
+      apiUrl: apiUrl ?? this.apiUrl,
+      enabled: enabled ?? this.enabled,
+      isBuiltIn: isBuiltIn ?? this.isBuiltIn,
+      sourceType: sourceType ?? this.sourceType,
+      spiderKey: spiderKey ?? this.spiderKey,
+      playerType: playerType ?? this.playerType,
+    );
+  }
+
+  factory VideoSource.fromCmsSite(CmsApiSite site) {
+    return VideoSource(
+      key: site.key,
+      name: site.name,
+      apiUrl: site.apiUrl,
+      enabled: site.enabled,
+      isBuiltIn: site.isBuiltIn,
+      sourceType: SourceType.cms,
+    );
+  }
+}
+
 /// 源状态检测结果
 class SourceStatus {
   final String key;
@@ -405,6 +464,11 @@ class VideoParser {
       key: 'oftens',
       name: 'Oftens',
       urlTemplate: 'https://jx.oftens.top/player/?url={url}',
+    ),
+    VideoParser(
+      key: 'jlk',
+      name: 'JLK解析',
+      urlTemplate: 'https://jlk.jianghu.vip/?url={url}',
     ),
   ];
 }
