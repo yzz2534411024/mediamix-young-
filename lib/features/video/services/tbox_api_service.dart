@@ -4,6 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:logger/logger.dart';
 import '../models/video_models.dart';
+import 'spider/tvbox_config_parser.dart';
 import '../../../core/network/proxy_config_service.dart';
 
 /// CMS API 视频服务
@@ -615,6 +616,25 @@ class VideoApiService {
         if (msg.isNotEmpty) return '网络错误: $msg';
         if (errorStr.isNotEmpty) return '网络错误: $errorStr';
         return '网络错误: 请检查接口地址是否正确';
+    }
+  }
+
+  /// 获取 TVBox 配置文件
+  Future<TvBoxConfig> fetchTvBoxConfig(String configUrl) async {
+    try {
+      final url = _buildUrl(configUrl, {});
+      _logger.d('获取TVBox配置: $url');
+
+      final response = await _dio.get(url);
+      final data = _extractJson(response);
+      return const TvBoxConfigParser().parse(data);
+    } on DioException catch (e) {
+      final errMsg = _formatDioError(e);
+      _logger.e('获取TVBox配置失败: $errMsg');
+      throw Exception(errMsg);
+    } catch (e) {
+      _logger.e('获取TVBox配置失败: $e');
+      throw Exception('加载失败: $e');
     }
   }
 
