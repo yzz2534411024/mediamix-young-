@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:logger/logger.dart';
 import 'video_cache_service.dart';
+import '../network/network_engine.dart';
 import '../network/proxy_config_service.dart';
 
 /// 本地 HTTP 代理服务器
@@ -314,6 +315,9 @@ class LocalProxyServer {
     final segBuffer = <int>[];
     const segMaxBytes = 512 * 1024; // 512KB 一片
 
+    final downloadStopwatch = Stopwatch()..start();
+    int totalDownloadBytes = 0;
+
     try {
       final dioResponse = await _dio.get<ResponseBody>(
         cdnUrl,
@@ -339,6 +343,7 @@ class LocalProxyServer {
       final stream = dioResponse.data!.stream;
       await for (final chunk in stream) {
         request.response.add(chunk);
+        totalDownloadBytes += chunk.length;
         segBuffer.addAll(chunk);
         segBytes += chunk.length;
 
@@ -366,11 +371,14 @@ class LocalProxyServer {
         );
       }
 
+      downloadStopwatch.stop();
+      if (totalDownloadBytes > 0 && downloadStopwatch.elapsedMilliseconds > 0) {
+        NetworkEngine.instance.reportBandwidthSample(totalDownloadBytes, downloadStopwatch.elapsedMilliseconds);
+      }
       await request.response.close();
-      _logger.d('代理缓存完成: $videoId, ${segIndex + 1} 个分片');
+      _logger.d('代理缓存完成: $videoId, ${segIndex + 1} 个分片, ${(totalDownloadBytes / 1024).toStringAsFixed(0)}KB, ${downloadStopwatch.elapsedMilliseconds}ms');
     } catch (e) {
       _logger.e('代理 CDN 请求失败: $e');
-      // 已发送的部分数据不会被撤回，但可以关闭连接
       try {
         await request.response.close();
       } catch (_) {}

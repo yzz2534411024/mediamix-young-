@@ -296,6 +296,11 @@ class NetworkEngine {
   /// 峰值带宽（Kbps）
   double get peakBandwidthKbps => _bandwidthEstimator.peak;
 
+  /// 供外部组件（如本地代理）上报带宽样本
+  void reportBandwidthSample(int bytesDownloaded, int durationMs) {
+    _bandwidthEstimator.addSample(bytesDownloaded, durationMs);
+  }
+
   /// 获取带宽估算值
   double estimateBandwidth() => _bandwidthEstimator.estimateBandwidth();
 

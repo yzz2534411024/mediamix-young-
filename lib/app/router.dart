@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../features/video/pages/video_home_page.dart';
@@ -29,7 +30,15 @@ final routerProvider = Provider<GoRouter>((ref) {
       ),
       GoRoute(
         path: '/player',
-        builder: (context, state) {
+        pageBuilder: (context, state) {
+          // 过渡开始前立即压暗系统 UI，消除任何闪光
+          SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+            statusBarColor: Colors.black,
+            systemNavigationBarColor: Colors.black,
+            statusBarIconBrightness: Brightness.light,
+            systemNavigationBarIconBrightness: Brightness.light,
+          ));
+
           final url = state.uri.queryParameters['url'] ?? '';
           final title = state.uri.queryParameters['title'] ?? '';
           final indexStr = state.uri.queryParameters['index'];
@@ -48,12 +57,15 @@ final routerProvider = Provider<GoRouter>((ref) {
               ? qualityUrlsStr!.split(',')
               : null;
 
-          // 暗色主题包裹 —— 消除页面过渡时的灰色闪现
-          return Theme(
-            data: Theme.of(context).copyWith(
-              scaffoldBackgroundColor: Colors.black,
-              canvasColor: Colors.black,
-            ),
+          return CustomTransitionPage(
+            key: state.pageKey,
+            opaque: true,
+            barrierColor: Colors.black,
+            transitionDuration: const Duration(milliseconds: 250),
+            reverseTransitionDuration: const Duration(milliseconds: 250),
+            transitionsBuilder: (_, animation, __, child) {
+              return FadeTransition(opacity: animation, child: child);
+            },
             child: PlayerPage(
               url: url,
               title: title,
