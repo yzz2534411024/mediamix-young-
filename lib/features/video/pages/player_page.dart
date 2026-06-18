@@ -64,6 +64,15 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     super.initState();
     WidgetsBinding.instance.addObserver(this);
 
+    // 立即全屏 + 暗色状态栏，消除进入时的灰色闪现
+    _enterFullscreen();
+    SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+      statusBarColor: Colors.black,
+      systemNavigationBarColor: Colors.black,
+      statusBarIconBrightness: Brightness.light,
+      systemNavigationBarIconBrightness: Brightness.light,
+    ));
+
     _manager = PlayerCoreManager();
 
     // 注册 UI 通知回调
@@ -78,7 +87,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     // Phase 1: 同步创建 Player + VideoController（让 Video 组件立即可用）
     _manager.initPlayerSync();
 
-    // Phase 2: 延后到首帧之后再执行耗时初始化（设备探测、URL加载、流订阅）
+    // Phase 2: 延后到首帧之后再执行耗时初始化
     final db = ref.read(databaseProvider);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -121,12 +130,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     _speedIndicatorTimer?.cancel();
     _manager.dispose();
     WidgetsBinding.instance.removeObserver(this);
-    // 恢复竖屏
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-    ]);
-    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    _exitFullscreen();
     super.dispose();
   }
 
@@ -739,20 +743,29 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   // 全屏切换
   // ========================================================================
 
+  void _enterFullscreen() {
+    _isFullscreen = true;
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+  }
+
+  void _exitFullscreen() {
+    _isFullscreen = false;
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  }
+
   void _toggleFullscreen() {
-    setState(() => _isFullscreen = !_isFullscreen);
     if (_isFullscreen) {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.landscapeLeft,
-        DeviceOrientation.landscapeRight,
-      ]);
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+      _exitFullscreen();
     } else {
-      SystemChrome.setPreferredOrientations([
-        DeviceOrientation.portraitUp,
-        DeviceOrientation.portraitDown,
-      ]);
-      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+      _enterFullscreen();
     }
     _showControlsAndResetTimer();
   }
@@ -1046,89 +1059,103 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   }
 
   Widget _buildTopBar() {
-    return Row(
-      children: [
-        // 返回按钮
-        IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-        // 标题
-        Expanded(
-          child: Text(
-            _manager.currentEpisodeName,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.w500,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Row(
+        children: [
+          // 返回
+          IconButton(
+            icon: const Icon(Icons.arrow_back, color: Colors.white, size: 22),
+            onPressed: () {
+              _exitFullscreen();
+              Navigator.pop(context);
+            },
+            padding: const EdgeInsets.all(8),
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
           ),
-        ),
-        // 锁屏按钮
-        IconButton(
-          icon: Icon(
-            _isLocked ? Icons.lock : Icons.lock_open,
-            color: Colors.white,
-          ),
-          onPressed: () {
-            setState(() => _isLocked = true);
-            _hideTimer?.cancel();
-          },
-        ),
-        // 倍速按钮
-        TextButton(
-          onPressed: _showSpeedSelector,
-          child: Text(
-            '${_manager.playbackSpeed}x',
-            style: const TextStyle(color: Colors.white),
-          ),
-        ),
-        // 清晰度按钮
-        if (_manager.hasQualityOptions)
-          TextButton(
-            onPressed: _showQualitySelector,
+          // 标题
+          Expanded(
             child: Text(
-              _manager.qualityLabels[_manager.currentQualityIndex],
-              style: const TextStyle(color: Colors.white, fontSize: 12),
+              _manager.currentEpisodeName,
+              style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w500),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ),
-        // 字幕按钮
-        IconButton(
-          icon: Icon(
-            _manager.showSubtitles ? Icons.closed_caption : Icons.closed_caption_disabled,
-            color: _manager.subtitleTracks.isNotEmpty ? Colors.white : Colors.white30,
+          // 倍速
+          _buildCompactButton(
+            onTap: _showSpeedSelector,
+            child: Text('${_manager.playbackSpeed}x', style: const TextStyle(color: Colors.white, fontSize: 12)),
           ),
-          onPressed: _manager.subtitleTracks.isNotEmpty
-              ? _showSubtitleTrackSelector
-              : null,
-          tooltip: _manager.subtitleTracks.isNotEmpty ? '字幕' : '无字幕',
-        ),
-        // 画面比例按钮
-        IconButton(
-          icon: const Icon(Icons.aspect_ratio, color: Colors.white),
-          onPressed: _showAspectModeSelector,
-        ),
-        // 功耗模式按钮
-        IconButton(
-          icon: Icon(_getPowerModeIcon(_manager.powerMode), color: Colors.white, size: 20),
-          onPressed: _showPowerModeSelector,
-        ),
-        // 画中画按钮
-        IconButton(
-          icon: const Icon(Icons.picture_in_picture_alt, color: Colors.white),
-          onPressed: _enterPipMode,
-        ),
-        // 全屏按钮
-        IconButton(
-          icon: Icon(
-            _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
-            color: Colors.white,
+          // 清晰度
+          if (_manager.hasQualityOptions)
+            _buildCompactButton(
+              onTap: _showQualitySelector,
+              child: Text(_manager.qualityLabels[_manager.currentQualityIndex], style: const TextStyle(color: Colors.white, fontSize: 11)),
+            ),
+          // 字幕
+          _buildCompactIcon(
+            icon: _manager.showSubtitles ? Icons.closed_caption : Icons.closed_caption_disabled,
+            enabled: _manager.subtitleTracks.isNotEmpty,
+            onTap: _manager.subtitleTracks.isNotEmpty ? _showSubtitleTrackSelector : null,
           ),
-          onPressed: _toggleFullscreen,
-        ),
-      ],
+          // 更多
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert, color: Colors.white, size: 20),
+            color: const Color(0xFF1E1E1E),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+            onSelected: (v) {
+              switch (v) {
+                case 'aspect': _showAspectModeSelector();
+                case 'power': _showPowerModeSelector();
+                case 'pip': _enterPipMode();
+                case 'playmode': _togglePlayMode();
+              }
+            },
+            itemBuilder: (_) => [
+              const PopupMenuItem(value: 'playmode', child: Text('播放模式')),
+              const PopupMenuItem(value: 'aspect', child: Text('画面比例')),
+              const PopupMenuItem(value: 'power', child: Text('功耗模式')),
+              const PopupMenuItem(value: 'pip', child: Text('后台播放')),
+            ],
+          ),
+          // 锁屏
+          _buildCompactIcon(
+            icon: _isLocked ? Icons.lock : Icons.lock_open,
+            enabled: true,
+            onTap: () {
+              setState(() => _isLocked = true);
+              _hideTimer?.cancel();
+            },
+          ),
+          // 全屏
+          _buildCompactIcon(
+            icon: _isFullscreen ? Icons.fullscreen_exit : Icons.fullscreen,
+            enabled: true,
+            onTap: _toggleFullscreen,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCompactButton({required Widget child, required VoidCallback onTap}) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+        child: child,
+      ),
+    );
+  }
+
+  Widget _buildCompactIcon({required IconData icon, required bool enabled, VoidCallback? onTap}) {
+    return IconButton(
+      icon: Icon(icon, color: enabled ? Colors.white : Colors.white30, size: 20),
+      onPressed: onTap,
+      padding: const EdgeInsets.all(6),
+      constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
     );
   }
 

@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../features/video/pages/video_home_page.dart';
@@ -47,14 +48,21 @@ final routerProvider = Provider<GoRouter>((ref) {
               ? qualityUrlsStr!.split(',')
               : null;
 
-          return PlayerPage(
-            url: url,
-            title: title,
-            episodeIndex: episodeIndex,
-            episodeNames: episodeNames,
-            episodeUrls: episodeUrls,
-            qualityLabels: qualityLabels,
-            qualityUrls: qualityUrls,
+          // 暗色主题包裹 —— 消除页面过渡时的灰色闪现
+          return Theme(
+            data: Theme.of(context).copyWith(
+              scaffoldBackgroundColor: Colors.black,
+              canvasColor: Colors.black,
+            ),
+            child: PlayerPage(
+              url: url,
+              title: title,
+              episodeIndex: episodeIndex,
+              episodeNames: episodeNames,
+              episodeUrls: episodeUrls,
+              qualityLabels: qualityLabels,
+              qualityUrls: qualityUrls,
+            ),
           );
         },
       ),
