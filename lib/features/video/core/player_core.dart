@@ -63,7 +63,8 @@ class BufferManager {
 
   void Function(bool isLow)? onBufferStateChanged;
 
-  BufferManager({this.onBufferStateChanged});
+  BufferManager({this.onBufferStateChanged})
+      : _isLowBuffer = Duration.zero < BufferWaterLines.wifi.low;
 
   BufferWaterLines get waterLines => _waterLines;
   Duration get currentBuffer => _currentBuffer;
@@ -125,8 +126,8 @@ class ABRController {
   DateTime? _lastSwitchTime;
   DateTime? _highBandwidthStart;
 
-  static const Duration _upgradeDelay = Duration(seconds: 5);
-  static const Duration _minSwitchInterval = Duration(seconds: 10);
+  final Duration _upgradeDelay;
+  final Duration _minSwitchInterval;
   static const Duration _downgradeBufferThreshold = Duration(seconds: 5);
   static const Duration _upgradeBufferThreshold = Duration(seconds: 30);
 
@@ -134,7 +135,12 @@ class ABRController {
 
   void Function(QualityLevel level)? onQualityChanged;
 
-  ABRController({this.onQualityChanged});
+  ABRController({
+    this.onQualityChanged,
+    Duration? upgradeDelay,
+    Duration? minSwitchInterval,
+  })  : _upgradeDelay = upgradeDelay ?? const Duration(seconds: 5),
+        _minSwitchInterval = minSwitchInterval ?? const Duration(seconds: 10);
 
   QualityLevel get currentQuality => _currentQuality;
 

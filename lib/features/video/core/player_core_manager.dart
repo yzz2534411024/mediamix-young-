@@ -190,14 +190,14 @@ class PlayerCoreManager extends ChangeNotifier {
   BufferManager get bufferManager => _bufferManager;
   ABRController get abrController => _abrController;
   bool get isSeeking => _isSeeking;
-  bool get isBuffering => _metricsEngine.isBuffering;
+  bool get isBuffering => _isInitialized ? _metricsEngine.isBuffering : false;
   bool get isLoading => _isLoading;
   String get loadingText => _loadingText;
   double get bufferPercent => _bufferPercent;
   String get networkSpeedText => _networkSpeedText;
   bool get isWaitingForNetwork => _errorHandler.isWaitingForNetwork;
   String? get lastError => _lastError;
-  bool get isUsingCache => _cacheEngine.isUsingCache;
+  bool get isUsingCache => _isInitialized ? _cacheEngine.isUsingCache : false;
   String? get fallbackQuality => _fallbackQuality;
   Duration get lastVideoPosition => _lastVideoPosition;
   bool get isInBackground => _isInBackground;

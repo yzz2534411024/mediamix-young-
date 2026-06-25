@@ -125,12 +125,15 @@ void main() {
     });
 
     test('带宽 < 800 → low', () async {
-      final abr = ABRController();
+      final abr = ABRController(
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       // 先降级到 low
       abr.updateBuffer(const Duration(seconds: 1));
       expect(abr.currentQuality, QualityLevel.low);
       // 然后设高缓冲 + 低带宽，不应升级
-      await Future.delayed(const Duration(seconds: 11)); // 等待 minSwitchInterval
+      await Future.delayed(const Duration(milliseconds: 250)); // 等待 minSwitchInterval
       abr.updateBandwidth(500);
       abr.updateBuffer(const Duration(seconds: 35));
       // 即使等 5s 延迟，带宽只支持 low，不会升级
@@ -138,45 +141,54 @@ void main() {
     });
 
     test('带宽 800-2499 → medium', () async {
-      final abr = ABRController();
+      final abr = ABRController(
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       abr.updateBuffer(const Duration(seconds: 1)); // 降级到 low
       expect(abr.currentQuality, QualityLevel.low);
 
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(1500);
       abr.updateBuffer(const Duration(seconds: 35));
       // 需要等 _upgradeDelay (5s)，但 _highBandwidthStart 刚设
       expect(abr.currentQuality, QualityLevel.low); // 还没过 5s
 
-      await Future.delayed(const Duration(seconds: 6));
+      await Future.delayed(const Duration(milliseconds: 150));
       abr.updateBuffer(const Duration(seconds: 35)); // 再次触发 evaluate
       expect(abr.currentQuality, QualityLevel.medium);
     });
 
     test('带宽 2500-4999 → high', () async {
-      final abr = ABRController();
+      final abr = ABRController(
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       abr.updateBuffer(const Duration(seconds: 1)); // 降级到 low
       expect(abr.currentQuality, QualityLevel.low);
 
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(3000);
       abr.updateBuffer(const Duration(seconds: 35));
 
-      await Future.delayed(const Duration(seconds: 6));
+      await Future.delayed(const Duration(milliseconds: 150));
       abr.updateBuffer(const Duration(seconds: 35));
       expect(abr.currentQuality, QualityLevel.high);
     });
 
     test('带宽 >= 5000 → ultra', () async {
-      final abr = ABRController();
+      final abr = ABRController(
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       abr.updateBuffer(const Duration(seconds: 1)); // 降级到 low
       expect(abr.currentQuality, QualityLevel.low);
 
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(6000);
       abr.updateBuffer(const Duration(seconds: 35));
 
-      await Future.delayed(const Duration(seconds: 6));
+      await Future.delayed(const Duration(milliseconds: 150));
       abr.updateBuffer(const Duration(seconds: 35));
       expect(abr.currentQuality, QualityLevel.ultra);
     });
@@ -229,9 +241,12 @@ void main() {
   // ===========================================================================
   group('升级逻辑', () {
     test('缓冲 <= 30s 不触发升级', () async {
-      final abr = ABRController();
+      final abr = ABRController(
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       abr.updateBuffer(const Duration(seconds: 1)); // 降级到 low
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(6000);
       abr.updateBuffer(const Duration(seconds: 30)); // 不大于 30s
       expect(abr.currentQuality, QualityLevel.low);
@@ -247,37 +262,47 @@ void main() {
     });
 
     test('缓冲 > 30s 且带宽支持 → 需等待 _upgradeDelay(5s) 才升级', () async {
-      final abr = ABRController();
+      final abr = ABRController(
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       abr.updateBuffer(const Duration(seconds: 1)); // 降级到 low
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(6000);
       abr.updateBuffer(const Duration(seconds: 35));
       // _highBandwidthStart 刚设置，还没过 5s
       expect(abr.currentQuality, QualityLevel.low);
 
-      await Future.delayed(const Duration(seconds: 6));
+      await Future.delayed(const Duration(milliseconds: 150));
       abr.updateBuffer(const Duration(seconds: 35));
       expect(abr.currentQuality, QualityLevel.ultra);
     });
 
     test('升级触发 onQualityChanged 回调', () async {
       QualityLevel? received;
-      final abr = ABRController(onQualityChanged: (level) {
-        received = level;
-      });
+      final abr = ABRController(
+        onQualityChanged: (level) {
+          received = level;
+        },
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       abr.updateBuffer(const Duration(seconds: 1)); // 降级
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(6000);
       abr.updateBuffer(const Duration(seconds: 35));
-      await Future.delayed(const Duration(seconds: 6));
+      await Future.delayed(const Duration(milliseconds: 150));
       abr.updateBuffer(const Duration(seconds: 35));
       expect(received, QualityLevel.ultra);
     });
 
     test('缓冲降回 <= 30s 时重置 _highBandwidthStart', () async {
-      final abr = ABRController();
+      final abr = ABRController(
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       abr.updateBuffer(const Duration(seconds: 1)); // 降级到 low
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(6000);
       abr.updateBuffer(const Duration(seconds: 35)); // 开始计时
       // 缓冲降回
@@ -313,13 +338,16 @@ void main() {
     });
 
     test('10s 后可以再次切换', () async {
-      final abr = ABRController();
+      final abr = ABRController(
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       abr.updateBuffer(const Duration(seconds: 1)); // 降级到 low
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(6000);
       abr.updateBuffer(const Duration(seconds: 35));
       // _highBandwidthStart 刚设
-      await Future.delayed(const Duration(seconds: 6));
+      await Future.delayed(const Duration(milliseconds: 150));
       abr.updateBuffer(const Duration(seconds: 35));
       expect(abr.currentQuality, QualityLevel.ultra);
     });
@@ -330,31 +358,34 @@ void main() {
   // ===========================================================================
   group('逐步升级', () {
     test('从 low 逐步升级到 medium → high → ultra', () async {
-      final abr = ABRController();
+      final abr = ABRController(
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       abr.updateBuffer(const Duration(seconds: 1)); // 降级到 low
       expect(abr.currentQuality, QualityLevel.low);
 
       // 升级到 medium
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(1500);
       abr.updateBuffer(const Duration(seconds: 35));
-      await Future.delayed(const Duration(seconds: 6));
+      await Future.delayed(const Duration(milliseconds: 150));
       abr.updateBuffer(const Duration(seconds: 35));
       expect(abr.currentQuality, QualityLevel.medium);
 
       // 升级到 high
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(3000);
       abr.updateBuffer(const Duration(seconds: 35));
-      await Future.delayed(const Duration(seconds: 6));
+      await Future.delayed(const Duration(milliseconds: 150));
       abr.updateBuffer(const Duration(seconds: 35));
       expect(abr.currentQuality, QualityLevel.high);
 
       // 升级到 ultra
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(6000);
       abr.updateBuffer(const Duration(seconds: 35));
-      await Future.delayed(const Duration(seconds: 6));
+      await Future.delayed(const Duration(milliseconds: 150));
       abr.updateBuffer(const Duration(seconds: 35));
       expect(abr.currentQuality, QualityLevel.ultra);
     });
@@ -365,13 +396,16 @@ void main() {
   // ===========================================================================
   group('降级打断升级等待', () {
     test('升级等待期间缓冲降低 → 降级到 low', () async {
-      final abr = ABRController();
+      final abr = ABRController(
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       abr.updateBuffer(const Duration(seconds: 1)); // 降级到 low
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(6000);
       abr.updateBuffer(const Duration(seconds: 35)); // 开始升级等待
       // 缓冲降低
-      await Future.delayed(const Duration(seconds: 2));
+      await Future.delayed(const Duration(milliseconds: 50));
       abr.updateBuffer(const Duration(seconds: 3)); // < 5s → 降级
       expect(abr.currentQuality, QualityLevel.low);
     });
@@ -446,9 +480,12 @@ void main() {
   // ===========================================================================
   group('updateBandwidth 和 updateBuffer 触发 _evaluate', () {
     test('updateBandwidth 触发评估', () async {
-      final abr = ABRController();
+      final abr = ABRController(
+        upgradeDelay: const Duration(milliseconds: 100),
+        minSwitchInterval: const Duration(milliseconds: 200),
+      );
       abr.updateBuffer(const Duration(seconds: 1)); // 降级到 low
-      await Future.delayed(const Duration(seconds: 11));
+      await Future.delayed(const Duration(milliseconds: 250));
       abr.updateBandwidth(6000); // 触发 _evaluate，但 buffer 仍 < 5s
       expect(abr.currentQuality, QualityLevel.low); // 不升级
     });
