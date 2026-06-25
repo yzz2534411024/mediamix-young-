@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:logger/logger.dart';
 
+import 'java_bridge_manager.dart';
 import 'spider_adapter.dart';
 import 'spider_models.dart';
 import 'spider_registry.dart';
@@ -76,8 +77,41 @@ class SpiderService {
   }
 
   /// 从 TVBox 配置创建所有蜘蛛
+  ///
+  /// 如果配置中包含 Java 蜘蛛（csp_*），会尝试启动 Java Bridge。
   Future<List<SpiderAdapter>> initFromConfig(TvBoxConfig config) async {
+    // 检查是否有 Java 蜘蛛需要桥接
+    final hasJavaSpiders = config.sites.any((s) => s.isJavaSpider);
+    if (hasJavaSpiders) {
+      await _ensureJavaBridge(config);
+    }
     return _registry.createFromSites(config.sites);
+  }
+
+  /// 确保 Java Bridge 已启动并注入到 Registry
+  Future<void> _ensureJavaBridge(TvBoxConfig config) async {
+    // 如果已经注入过，跳过
+    if (_registry.javaBridgeClient != null &&
+        _registry.javaBridgeClient!.isAvailable) {
+      return;
+    }
+
+    final bridgeManager = JavaBridgeManager.instance;
+
+    // 如果 Bridge 未启动，尝试启动
+    if (!bridgeManager.isRunning) {
+      final started = await bridgeManager.initialize(
+        spiderJarUrl: config.spiderUrl,
+      );
+      if (!started) {
+        _logger.w('Java Bridge 启动失败，csp_* 蜘蛛将不可用');
+        return;
+      }
+    }
+
+    // 注入客户端到 Registry
+    _registry.javaBridgeClient = bridgeManager.client;
+    _logger.d('Java Bridge 已注入 SpiderRegistry');
   }
 
   /// 获取蜘蛛实例
@@ -127,7 +161,11 @@ class SpiderService {
   }
 
   /// 释放所有蜘蛛
-  void disposeAll() => _registry.disposeAll();
+  void disposeAll() {
+    _registry.disposeAll();
+    // 同时关闭 Java Bridge
+    JavaBridgeManager.instance.shutdown();
+  }
 
   /// 从 bytes 提取 JSON（尝试 UTF-8 解码后直接解析）
   Map<String, dynamic>? _extractJsonFromBytes(List<int> bytes) {

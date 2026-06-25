@@ -7,6 +7,9 @@ class TvBoxSite {
   final String? ext;
   final String? jar;
   final int? playerType;
+  final bool searchable;
+  final bool quickSearch;
+  final bool changeable;
 
   const TvBoxSite({
     required this.key,
@@ -16,7 +19,13 @@ class TvBoxSite {
     this.ext,
     this.jar,
     this.playerType,
+    this.searchable = true,
+    this.quickSearch = false,
+    this.changeable = false,
   });
+
+  /// 是否为 Java 蜘蛛（csp_* 格式）
+  bool get isJavaSpider => api.startsWith('csp_');
 }
 
 /// TVBox 直播配置模型
@@ -101,6 +110,9 @@ class TvBoxConfigParser {
           ext: _stringValue(item['ext']),
           jar: _stringValue(item['jar']),
           playerType: _intValue(item['playerType']),
+          searchable: (_intValue(item['searchable']) ?? 1) != 0,
+          quickSearch: (_intValue(item['quickSearch']) ?? 0) != 0,
+          changeable: (_intValue(item['changeable']) ?? 0) != 0,
         ),
       );
     }

@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'cms_spider.dart';
+import 'java_bridge_client.dart';
+import 'java_bridge_spider.dart';
 import 'json_spider.dart';
 import 'spider_adapter.dart';
 import 'tvbox_config_parser.dart';
@@ -30,6 +32,9 @@ class SpiderRegistry {
   void register(String key, SpiderFactory factory) {
     _factories[key] = factory;
   }
+
+  /// 全局共享的 Java Bridge 客户端（由 SpiderService 初始化时注入）
+  JavaBridgeClient? javaBridgeClient;
 
   /// 根据站点配置创建或返回缓存的蜘蛛实例
   ///
@@ -86,13 +91,23 @@ class SpiderRegistry {
       return factory(site);
     }
 
+    // Java 蜘蛛桥接：csp_* 格式的 API 名称
+    if (site.isJavaSpider && javaBridgeClient != null) {
+      return JavaBridgeSpider(site: site, client: javaBridgeClient!);
+    }
+
     switch (site.type) {
       case 0:
         return CmsSpider(site: site);
       case 1:
         return JsonSpider(site: site);
       case 3:
-        return XpathSpider(site: site);
+        // type=3 且非 csp_* 格式，使用 XPath 蜘蛛
+        if (!site.isJavaSpider) {
+          return XpathSpider(site: site);
+        }
+        // csp_* 格式但 Bridge 不可用，返回 null
+        return null;
       default:
         return null;
     }

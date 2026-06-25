@@ -6,6 +6,7 @@ enum SpiderType {
   xpath, // XPath爬虫
   json, // JSON API爬虫
   site, // 自定义站点爬虫
+  javaBridge, // Java蜘蛛桥接（csp_*Guard 等）
 }
 
 /// 首页推荐结果
