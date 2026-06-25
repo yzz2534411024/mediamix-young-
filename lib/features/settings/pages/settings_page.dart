@@ -6,6 +6,7 @@ import '../../video/providers/video_providers.dart';
 import '../../../core/services/theme_provider.dart';
 import '../../../core/services/privacy_manager_service.dart';
 import '../../../core/services/data_reporter_service.dart';
+import '../../../core/database/database.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
@@ -44,6 +45,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   }
 
   Future<void> _refreshDataSummary() async {
+    await DataReporterService.instance.ensureInitialized(AppDatabase.instance);
     final summary = await DataReporterService.instance.getLocalDataSummary();
     if (mounted) {
       setState(() {

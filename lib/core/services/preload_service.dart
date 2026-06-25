@@ -48,6 +48,120 @@ enum PreloadTaskStatus {
   cancelled,
 }
 
+/// 预加载任务状态快照
+class PreloadStatusInfo {
+  /// 各状态的任务数量
+  final int pendingCount;
+  final int downloadingCount;
+  final int completedCount;
+  final int cancelledCount;
+  final int failedCount;
+
+  /// 当前动态预加载深度
+  final int currentDepth;
+
+  const PreloadStatusInfo({
+    required this.pendingCount,
+    required this.downloadingCount,
+    required this.completedCount,
+    required this.cancelledCount,
+    required this.failedCount,
+    required this.currentDepth,
+  });
+
+  /// 总任务数
+  int get totalCount =>
+      pendingCount + downloadingCount + completedCount + cancelledCount + failedCount;
+
+  /// 是否有进行中的任务
+  bool get hasActiveTasks => downloadingCount > 0;
+}
+
+/// 动态预加载深度计算器
+///
+/// 基于用户停留时长、跳出率、网络状况和存储空间，
+/// 动态计算预加载深度（1-3 个相邻集）。
+class PreloadDepthCalculator {
+  /// 最小预加载深度
+  static const int minDepth = 1;
+
+  /// 最大预加载深度
+  static const int maxDepth = 3;
+
+  /// 默认深度
+  static const int defaultDepth = 2;
+
+  /// 用户平均停留时长阈值（秒）
+  static const double longDwellThresholdSec = 600; // 10 分钟
+  static const double shortDwellThresholdSec = 120; // 2 分钟
+
+  /// 跳出率阈值
+  static const double highBounceRateThreshold = 0.6;
+  static const double lowBounceRateThreshold = 0.3;
+
+  /// 可用存储空间阈值（字节）
+  static const int lowStorageThreshold = 500 * 1024 * 1024; // 500MB
+
+  /// 计算动态预加载深度
+  ///
+  /// [networkCondition] 当前网络状况
+  /// [avgDwellTimeSec] 用户平均停留时长（秒），null 表示无数据
+  /// [bounceRate] 跳出率（0.0~1.0），null 表示无数据
+  /// [availableStorageBytes] 可用存储空间（字节），null 表示无数据
+  int calculateDepth({
+    required NetworkCondition networkCondition,
+    double? avgDwellTimeSec,
+    double? bounceRate,
+    int? availableStorageBytes,
+  }) {
+    // 离线 / 弱网直接返回
+    if (networkCondition == NetworkCondition.offline) return 0;
+    if (networkCondition == NetworkCondition.weak) return minDepth;
+
+    // 基础深度：根据网络条件
+    int baseDepth;
+    switch (networkCondition) {
+      case NetworkCondition.wifi:
+        baseDepth = maxDepth; // 3
+      case NetworkCondition.lte:
+        baseDepth = 2;
+      case NetworkCondition.threeG:
+        baseDepth = minDepth;
+      default:
+        baseDepth = minDepth;
+    }
+
+    // 停留时长调整（-1 ~ +1）
+    int dwellAdjustment = 0;
+    if (avgDwellTimeSec != null) {
+      if (avgDwellTimeSec >= longDwellThresholdSec) {
+        dwellAdjustment = 1;
+      } else if (avgDwellTimeSec < shortDwellThresholdSec) {
+        dwellAdjustment = -1;
+      }
+    }
+
+    // 跳出率调整（-1 ~ 0）
+    int bounceAdjustment = 0;
+    if (bounceRate != null) {
+      if (bounceRate >= highBounceRateThreshold) {
+        bounceAdjustment = -1;
+      }
+    }
+
+    // 存储空间调整（-1 ~ 0）
+    int storageAdjustment = 0;
+    if (availableStorageBytes != null) {
+      if (availableStorageBytes < lowStorageThreshold) {
+        storageAdjustment = -1;
+      }
+    }
+
+    final depth = baseDepth + dwellAdjustment + bounceAdjustment + storageAdjustment;
+    return depth.clamp(minDepth, maxDepth);
+  }
+}
+
 /// 网络条件使用 NetworkCondition（来自 network_engine.dart）
 /// wifi / lte / threeG / weak / offline
 
@@ -220,6 +334,21 @@ class PreloadService {
   /// 任务ID计数器
   int _taskIdCounter = 0;
 
+  /// 动态预加载深度计算器
+  final PreloadDepthCalculator _depthCalculator = PreloadDepthCalculator();
+
+  /// 当前动态预加载深度（1-3）
+  int _currentPreloadDepth = PreloadDepthCalculator.defaultDepth;
+
+  /// 用户平均停留时长（秒），由外部更新
+  double? _avgDwellTimeSec;
+
+  /// 跳出率（0.0~1.0），由外部更新
+  double? _bounceRate;
+
+  /// 可用存储空间（字节），由外部更新
+  int? _availableStorageBytes;
+
   /// 是否已销毁
   bool _disposed = false;
 
@@ -238,6 +367,85 @@ class PreloadService {
 
   /// 当前预加载策略
   PreloadStrategy get strategy => _strategy;
+
+  /// 当前动态预加载深度
+  int get currentPreloadDepth => _currentPreloadDepth;
+
+  /// 获取预加载状态快照
+  PreloadStatusInfo getPreloadStatus() {
+    int pending = 0, downloading = 0, completed = 0, cancelled = 0, failed = 0;
+    for (final task in _tasks) {
+      switch (task.status) {
+        case PreloadTaskStatus.waiting:
+          pending++;
+        case PreloadTaskStatus.downloading:
+          downloading++;
+        case PreloadTaskStatus.completed:
+          completed++;
+        case PreloadTaskStatus.cancelled:
+          cancelled++;
+        case PreloadTaskStatus.failed:
+          failed++;
+      }
+    }
+    return PreloadStatusInfo(
+      pendingCount: pending,
+      downloadingCount: downloading,
+      completedCount: completed,
+      cancelledCount: cancelled,
+      failedCount: failed,
+      currentDepth: _currentPreloadDepth,
+    );
+  }
+
+  /// 更新用户行为数据，重新计算预加载深度
+  ///
+  /// [avgDwellTimeSec] 用户平均停留时长（秒）
+  /// [bounceRate] 跳出率（0.0~1.0）
+  /// [availableStorageBytes] 可用存储空间（字节）
+  void updateUserBehavior({
+    double? avgDwellTimeSec,
+    double? bounceRate,
+    int? availableStorageBytes,
+  }) {
+    if (avgDwellTimeSec != null) _avgDwellTimeSec = avgDwellTimeSec;
+    if (bounceRate != null) _bounceRate = bounceRate;
+    if (availableStorageBytes != null) _availableStorageBytes = availableStorageBytes;
+
+    final newDepth = _depthCalculator.calculateDepth(
+      networkCondition: _networkCondition,
+      avgDwellTimeSec: _avgDwellTimeSec,
+      bounceRate: _bounceRate,
+      availableStorageBytes: _availableStorageBytes,
+    );
+
+    if (newDepth != _currentPreloadDepth) {
+      _logger.i('预加载深度调整: $_currentPreloadDepth → $newDepth '
+          '(停留=${_avgDwellTimeSec?.toStringAsFixed(0) ?? "?"}s, '
+          '跳出率=${_bounceRate?.toStringAsFixed(2) ?? "?"}, '
+          '存储=${_availableStorageBytes != null ? "${(_availableStorageBytes! / 1024 / 1024 / 1024).toStringAsFixed(1)}GB" : "?"}, '
+          '网络=${_networkCondition.name})');
+      _currentPreloadDepth = newDepth;
+
+      // 深度减少时，取消超出部分的低优先级等待任务
+      _trimTasksToDepth();
+    }
+  }
+
+  /// 根据当前深度裁剪低优先级等待任务
+  void _trimTasksToDepth() {
+    final waitingTasks = _tasks
+        .where((t) => t.status == PreloadTaskStatus.waiting)
+        .toList();
+    waitingTasks.sort((a, b) => a.priority.value.compareTo(b.priority.value));
+    for (int i = _currentPreloadDepth; i < waitingTasks.length; i++) {
+      waitingTasks[i].cancel();
+      _tasks.remove(waitingTasks[i]);
+    }
+    if (waitingTasks.length > _currentPreloadDepth) {
+      _notifyTasksUpdate();
+    }
+  }
 
   /// 添加预加载任务
   ///
@@ -342,6 +550,9 @@ class PreloadService {
         '预加载数量=${_strategy.preloadCount}, '
         '首段字节=${_strategy.initialBytes}, '
         '带宽占比=${(_strategy.bandwidthFraction * 100).toStringAsFixed(0)}%');
+
+    // 网络条件变化时重新计算深度
+    updateUserBehavior();
 
     // 离线时取消所有任务
     if (condition == NetworkCondition.offline) {

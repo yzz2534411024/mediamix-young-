@@ -117,7 +117,12 @@ class BufferManager {
 
 /// ABR 自适应码率控制器
 ///
-/// 由于当前应用没有多码率流，实现为网络质量指示器 + 画质偏好管理
+/// 基于吞吐量预测的智能码率选择：
+/// - 预测吞吐量（主因素，权重 60%）
+/// - 当前缓冲水位（安全因素，权重 25%）
+/// - 历史带宽稳定性（趋势因素，权重 15%）
+/// - 切换防抖：连续 2 次预测一致才执行切换
+/// - 安全余量：预测吞吐量 * 0.8 作为实际选择依据
 class ABRController {
   final Logger _logger = Logger(printer: SimplePrinter());
 
@@ -130,6 +135,22 @@ class ABRController {
   final Duration _minSwitchInterval;
   static const Duration _downgradeBufferThreshold = Duration(seconds: 5);
   static const Duration _upgradeBufferThreshold = Duration(seconds: 30);
+
+  // ---- 吞吐量预测相关 ----
+  ThroughputPrediction? _latestPrediction;
+
+  // 决策权重
+  static const double _throughputWeight = 0.60;
+  static const double _bufferWeight = 0.25;
+  static const double _stabilityWeight = 0.15;
+
+  // 安全余量系数
+  static const double _safetyMargin = 0.8;
+
+  // 切换防抖：连续 2 次预测一致才执行
+  static const int _debounceCount = 2;
+  QualityLevel? _pendingQuality;
+  int _pendingCount = 0;
 
   QualityLevel _currentQuality = QualityLevel.medium;
 
@@ -144,53 +165,159 @@ class ABRController {
 
   QualityLevel get currentQuality => _currentQuality;
 
+  /// 当前吞吐量预测结果（可能为 null）
+  ThroughputPrediction? get latestPrediction => _latestPrediction;
+
+  /// 更新带宽值（兼容旧接口，同时作为回退）
   void updateBandwidth(double kbps) {
     _currentBandwidthKbps = kbps;
     _evaluate();
   }
 
+  /// 更新缓冲区状态
   void updateBuffer(Duration buffer) {
     _currentBuffer = buffer;
+    _evaluate();
+  }
+
+  /// 更新吞吐量预测数据（新接口，由 PlayerCoreManager 调用）
+  void updateThroughputPrediction(ThroughputPrediction prediction) {
+    _latestPrediction = prediction;
+    _currentBandwidthKbps = prediction.predictedKbps;
     _evaluate();
   }
 
   void _evaluate() {
     final now = DateTime.now();
 
+    // 切换冷却期保护
     if (_lastSwitchTime != null &&
         now.difference(_lastSwitchTime!) < _minSwitchInterval) {
       return;
     }
 
-    // 降级：缓冲 < 5s
+    // 紧急降级：缓冲 < 5s 时立即降级，不受防抖约束
     if (_currentBuffer < _downgradeBufferThreshold &&
         _currentQuality != QualityLevel.low) {
-      _switchQuality(QualityLevel.low, '缓冲不足，降级画质');
+      _pendingQuality = null;
+      _pendingCount = 0;
+      _switchQuality(QualityLevel.low, '缓冲不足，紧急降级画质');
       return;
     }
 
-    // 升级：缓冲 > 30s 且带宽充足
-    if (_currentBuffer > _upgradeBufferThreshold) {
-      final target = _qualityForBandwidth(_currentBandwidthKbps);
-      if (target.index > _currentQuality.index) {
-        if (_highBandwidthStart == null) {
-          _highBandwidthStart = now;
-        } else if (now.difference(_highBandwidthStart!) >= _upgradeDelay) {
-          _switchQuality(target, '带宽充足，升级画质');
-        }
-      } else {
-        _highBandwidthStart = null;
-      }
+    // 智能码率决策
+    final targetQuality = _computeTargetQuality();
+    if (targetQuality == null) return;
+
+    if (targetQuality.index > _currentQuality.index) {
+      // 升级需要防抖 + 延迟确认
+      _applyDebounce(targetQuality, now);
+    } else if (targetQuality.index < _currentQuality.index) {
+      // 降级也需要防抖（但缓冲紧急降级已在上面处理）
+      _applyDebounce(targetQuality, now);
     } else {
+      // 目标与当前一致，重置防抖
+      _pendingQuality = null;
+      _pendingCount = 0;
       _highBandwidthStart = null;
     }
   }
 
-  QualityLevel _qualityForBandwidth(double kbps) {
-    if (kbps <= 0) return QualityLevel.low;
-    if (kbps < 800) return QualityLevel.low;
-    if (kbps < 2500) return QualityLevel.medium;
-    if (kbps < 5000) return QualityLevel.high;
+  /// 应用切换防抖逻辑
+  void _applyDebounce(QualityLevel target, DateTime now) {
+    if (target == _pendingQuality) {
+      _pendingCount++;
+    } else {
+      _pendingQuality = target;
+      _pendingCount = 1;
+    }
+
+    if (_pendingCount >= _debounceCount) {
+      // 防抖通过，执行升级延迟检查
+      if (target.index > _currentQuality.index) {
+        // 升级：需要缓冲充足 + 延迟确认
+        if (_currentBuffer > _upgradeBufferThreshold) {
+          if (_highBandwidthStart == null) {
+            _highBandwidthStart = now;
+          } else if (now.difference(_highBandwidthStart!) >= _upgradeDelay) {
+            _switchQuality(target, '预测吞吐量充足，升级画质');
+            _pendingQuality = null;
+            _pendingCount = 0;
+          }
+        } else {
+          _highBandwidthStart = null;
+        }
+      } else {
+        // 降级：防抖通过直接执行
+        _switchQuality(target, '预测吞吐量不足，降级画质');
+        _pendingQuality = null;
+        _pendingCount = 0;
+      }
+    }
+  }
+
+  /// 基于加权模型计算目标画质
+  ///
+  /// 决策因素：
+  /// - 预测吞吐量（60%）：使用安全余量后的有效吞吐量
+  /// - 当前缓冲水位（25%）：缓冲充足时倾向于更高画质
+  /// - 历史带宽稳定性（15%）：稳定性高时更信任预测
+  QualityLevel? _computeTargetQuality() {
+    // 获取三个因素的评分
+    final throughputScore = _computeThroughputScore();
+    final bufferScore = _computeBufferScore();
+    final stabilityScore = _computeStabilityScore();
+
+    // 加权综合评分（0.0 - 1.0）
+    final weightedScore = throughputScore * _throughputWeight +
+        bufferScore * _bufferWeight +
+        stabilityScore * _stabilityWeight;
+
+    // 将综合评分映射到画质等级
+    return _scoreToQuality(weightedScore);
+  }
+
+  /// 吞吐量评分（0.0 - 1.0）
+  ///
+  /// 使用预测吞吐量 * 安全余量，映射到 [0, 1]。
+  double _computeThroughputScore() {
+    double effectiveKbps;
+    if (_latestPrediction != null) {
+      effectiveKbps = _latestPrediction!.predictedKbps * _safetyMargin;
+    } else {
+      effectiveKbps = _currentBandwidthKbps * _safetyMargin;
+    }
+    if (effectiveKbps <= 0) return 0.0;
+    // 映射到 [0, 1]：10000kbps 为满分
+    return (effectiveKbps / 10000).clamp(0.0, 1.0);
+  }
+
+  /// 缓冲水位评分（0.0 - 1.0）
+  ///
+  /// 缓冲充足时评分高，允许更高画质。
+  double _computeBufferScore() {
+    final bufferSec = _currentBuffer.inSeconds;
+    if (bufferSec >= 30) return 1.0;
+    if (bufferSec <= 5) return 0.0;
+    return (bufferSec - 5) / 25.0; // 5s→0, 30s→1
+  }
+
+  /// 稳定性评分（0.0 - 1.0）
+  ///
+  /// 基于历史带宽稳定性，稳定性高时更信任预测结果。
+  double _computeStabilityScore() {
+    if (_latestPrediction != null) {
+      return _latestPrediction!.stability;
+    }
+    // 无预测数据时默认中等稳定性
+    return 0.5;
+  }
+
+  /// 将综合评分映射到画质等级
+  QualityLevel _scoreToQuality(double score) {
+    if (score < 0.15) return QualityLevel.low;
+    if (score < 0.35) return QualityLevel.medium;
+    if (score < 0.60) return QualityLevel.high;
     return QualityLevel.ultra;
   }
 

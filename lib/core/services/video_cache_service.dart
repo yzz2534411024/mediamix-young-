@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'package:logger/logger.dart';
 import '../utils/hash_utils.dart';
+import 'cache_strategy_manager.dart';
 
 // ============================================================
 // 数据类与枚举
@@ -183,6 +184,60 @@ class CacheStats {
 }
 
 // ============================================================
+// 内存压力等级
+// ============================================================
+
+/// 内存压力等级
+///
+/// - normal: 正常，L1/L2 保持当前容量
+/// - warning: 警告（>70%），L1 容量减半，L2 容量减半
+/// - critical: 严重（>90%），清空 L1，L2 容量降至最低
+enum MemoryPressureLevel {
+  normal,
+  warning,
+  critical,
+}
+
+/// 内存使用信息
+///
+/// 返回 L1/L2 当前占用内存及内存压力等级
+class MemoryUsageInfo {
+  /// L1 帧缓存占用字节数
+  final int l1Bytes;
+
+  /// L2 流缓存占用字节数
+  final int l2Bytes;
+
+  /// 进程当前 RSS（常驻集大小）
+  final int processRssBytes;
+
+  /// 当前内存压力等级
+  final MemoryPressureLevel pressureLevel;
+
+  /// L1 当前最大条目数（动态调整）
+  final int l1MaxEntries;
+
+  /// L2 当前最大条目数（动态调整）
+  final int l2MaxEntries;
+
+  const MemoryUsageInfo({
+    required this.l1Bytes,
+    required this.l2Bytes,
+    required this.processRssBytes,
+    required this.pressureLevel,
+    required this.l1MaxEntries,
+    required this.l2MaxEntries,
+  });
+
+  @override
+  String toString() =>
+      'MemoryUsageInfo(L1: ${(l1Bytes / 1024).toStringAsFixed(1)}KB/$l1MaxEntries条, '
+      'L2: ${(l2Bytes / 1024).toStringAsFixed(1)}KB/$l2MaxEntries条, '
+      'RSS: ${(processRssBytes / 1024 / 1024).toStringAsFixed(1)}MB, '
+      '压力: $pressureLevel)';
+}
+
+// ============================================================
 // 内部缓存条目（L1 / L2 内存缓存）
 // ============================================================
 
@@ -203,12 +258,44 @@ class _MemoryCacheEntry {
   /// 命中次数
   int hitCount;
 
+  /// 创建时间
+  final DateTime createdAt;
+
+  /// 估算内存占用（字节）
+  final int estimatedBytes;
+
   _MemoryCacheEntry({
     required this.videoId,
     required this.quality,
     required this.frameBuffer,
     DateTime? lastAccess,
-  }) : hitCount = 0, lastAccess = lastAccess ?? DateTime.now();
+    DateTime? createdAt,
+    int? estimatedBytes,
+  })  : hitCount = 0,
+        lastAccess = lastAccess ?? DateTime.now(),
+        createdAt = createdAt ?? DateTime.now(),
+        estimatedBytes = estimatedBytes ?? _estimateFrameBufferSize(frameBuffer);
+
+  /// 是否已过期（基于 TTL）
+  bool isExpired(Duration ttl) {
+    return DateTime.now().difference(lastAccess) > ttl;
+  }
+
+  /// 估算帧缓冲大小
+  static int _estimateFrameBufferSize(Map<String, dynamic> buffer) {
+    // 粗略估算：遍历 buffer 中的值
+    int size = 0;
+    for (final value in buffer.values) {
+      if (value is List<int>) {
+        size += value.length;
+      } else if (value is String) {
+        size += value.length * 2;
+      } else {
+        size += 64; // 其他类型粗略估算
+      }
+    }
+    return size > 0 ? size : 1024; // 至少 1KB
+  }
 }
 
 /// L2 内存缓存条目 — 原始流数据
@@ -231,13 +318,24 @@ class _StreamCacheEntry {
   /// 命中次数
   int hitCount;
 
+  /// 创建时间
+  final DateTime createdAt;
+
   _StreamCacheEntry({
     required this.videoId,
     required this.segmentKey,
     required this.quality,
     required this.data,
     DateTime? lastAccess,
-  }) : hitCount = 0, lastAccess = lastAccess ?? DateTime.now();
+    DateTime? createdAt,
+  })  : hitCount = 0,
+        lastAccess = lastAccess ?? DateTime.now(),
+        createdAt = createdAt ?? DateTime.now();
+
+  /// 是否已过期（基于 TTL）
+  bool isExpired(Duration ttl) {
+    return DateTime.now().difference(lastAccess) > ttl;
+  }
 }
 
 // ============================================================
@@ -269,8 +367,14 @@ class VideoCacheService {
   /// key: "${videoId}_${quality}"
   final Map<String, _MemoryCacheEntry> _memoryCache = {};
 
-  /// L1 最大条目数
-  static const int _l1MaxEntries = 20;
+  /// L1 基础最大条目数（内存压力为 normal 时）
+  static const int _l1BaseMaxEntries = 20;
+
+  /// L2 基础最大条目数（内存压力为 normal 时）
+  static const int _l2BaseMaxEntries = 50;
+
+  /// L2 最低最大条目数（内存压力为 critical 时）
+  static const int _l2MinEntries = 5;
 
   // ----------------------------------------------------------
   // L2 内存缓存 — 原始流数据
@@ -278,8 +382,7 @@ class VideoCacheService {
   /// key: "${videoId}_${segmentKey}_${quality}"
   final Map<String, _StreamCacheEntry> _streamCache = {};
 
-  /// L2 最大条目数
-  static const int _l2MaxEntries = 50;
+
 
   // ----------------------------------------------------------
   // L3/L4 磁盘缓存索引
@@ -304,7 +407,43 @@ class VideoCacheService {
   /// 是否已初始化
   bool _initialized = false;
 
+  /// 当前内存压力等级
+  MemoryPressureLevel _memoryPressure = MemoryPressureLevel.normal;
+
+  /// 当前活跃的 videoId 集合（用于区分活跃/非活跃 TTL）
+  final Set<String> _activeVideoIds = {};
+
+  /// TTL 定期清理定时器
+  Timer? _ttlCleanupTimer;
+
+  /// 内存压力检查计数器（避免每次操作都检查）
+  int _memoryCheckCounter = 0;
+
+  /// 内存压力检查间隔（每 N 次缓存操作检查一次）
+  static const int _memoryCheckInterval = 10;
+
   final Logger _logger = Logger(printer: SimplePrinter());
+
+  // ----------------------------------------------------------
+  // 缓存策略管理器（可选依赖）
+  // ----------------------------------------------------------
+
+  /// 智能缓存策略管理器（可选）
+  ///
+  /// 如果已初始化，则使用动态 TTL / 容量倍数 / 优先级；
+  /// 否则回退到硬编码默认值。
+  CacheStrategyManager? _strategyManager;
+
+  /// 设置缓存策略管理器
+  ///
+  /// 传入 null 可清除引用，回退到默认硬编码值。
+  void setStrategyManager(CacheStrategyManager? manager) {
+    _strategyManager = manager;
+    _logger.i('缓存策略管理器已${manager != null ? "接入" : "移除"}');
+  }
+
+  /// 获取当前缓存策略管理器（可能为 null）
+  CacheStrategyManager? get strategyManager => _strategyManager;
 
   // ----------------------------------------------------------
   // 常量配置
@@ -331,6 +470,43 @@ class VideoCacheService {
   /// 分段缓存子目录名
   static const String _segmentSubDir = 'segments';
 
+  // ----------------------------------------------------------
+  // 内存压力阈值配置
+  // ----------------------------------------------------------
+
+  /// 内存压力警告阈值（70%）
+  static const double _memoryWarningThreshold = 0.70;
+
+  /// 内存压力严重阈值（90%）
+  static const double _memoryCriticalThreshold = 0.90;
+
+  /// 默认最大进程 RSS（512MB），超过此值视为内存压力严重
+  static const int _defaultMaxRssBytes = 512 * 1024 * 1024;
+
+  /// 可覆盖的最大进程 RSS（用于测试或高级配置）
+  int _maxRssBytes = _defaultMaxRssBytes;
+
+  /// 内存读取函数（可注入以便测试）
+  ///
+  /// 默认返回 0（安全值），实际使用时可通过 [setMemoryReader] 注入真实实现
+  int Function() _memoryReader = () => 0;
+
+  // ----------------------------------------------------------
+  // L1/L2 帧缓存 TTL 配置
+  // ----------------------------------------------------------
+
+  /// 活跃视频 L1 帧缓存 TTL：5 分钟
+  static const Duration _l1ActiveTtl = Duration(minutes: 5);
+
+  /// 非活跃视频 L1 帧缓存 TTL：1 分钟
+  static const Duration _l1InactiveTtl = Duration(minutes: 1);
+
+  /// L2 流缓存 TTL：5 分钟
+  static const Duration _l2Ttl = Duration(minutes: 5);
+
+  /// TTL 定期清理间隔：30 秒
+  static const Duration _ttlCleanupInterval = Duration(seconds: 30);
+
   // ============================================================
   // 公开属性
   // ============================================================
@@ -340,6 +516,15 @@ class VideoCacheService {
 
   /// 实时统计流
   Stream<CacheStats> get statsStream => _statsController.stream;
+
+  /// 当前内存压力等级
+  MemoryPressureLevel get memoryPressure => _memoryPressure;
+
+  /// L1 当前动态最大条目数
+  int get l1CurrentMaxEntries => _getL1MaxEntries();
+
+  /// L2 当前动态最大条目数
+  int get l2CurrentMaxEntries => _getL2MaxEntries();
 
   // ============================================================
   // 初始化
@@ -368,6 +553,9 @@ class VideoCacheService {
 
       // 从磁盘加载索引
       await _loadIndexFromDisk();
+
+      // 启动 TTL 定期清理
+      _startTtlCleanupTimer();
 
       _initialized = true;
       _logger.i('视频缓存服务初始化完成，索引条目: ${_diskIndex.length}');
@@ -421,6 +609,8 @@ class VideoCacheService {
         _hitCount++;
         _notifyStats();
         _logger.d('缓存命中(L3): $videoId@$q');
+        // 记录观看行为
+        _recordViewingIfNeeded(videoId);
         return entry.filePath;
       }
     }
@@ -480,15 +670,40 @@ class VideoCacheService {
 
   /// 缓存完整视频文件（L3）
   ///
-  /// 将视频文件存入磁盘缓存并更新索引
+  /// 将视频文件存入磁盘缓存并更新索引。
+  /// 如果已接入 [CacheStrategyManager]，TTL 和 priority 将使用动态值。
   Future<void> putVideo(
     String videoId,
     String filePath, {
     String quality = '720p',
     int priority = 0,
     int ttl = 604800,
+    String? category,
   }) async {
     try {
+      // 使用动态 TTL（如果策略管理器可用）
+      final effectiveTtl = _strategyManager != null &&
+              _strategyManager!.isInitialized
+          ? _strategyManager!.getDynamicTtl(videoId,
+              category: category, baseTtl: ttl)
+          : ttl;
+
+      // 使用动态优先级（如果策略管理器可用）
+      int effectivePriority = priority;
+      if (_strategyManager != null && _strategyManager!.isInitialized) {
+        final dynamicPriority =
+            _strategyManager!.getPriority(videoId, category: category);
+        // 将 CachePriority 映射为数值：high=20, normal=0, low=-5
+        final mappedPriority = dynamicPriority == CachePriority.high
+            ? 20
+            : dynamicPriority == CachePriority.low
+                ? -5
+                : 0;
+        // 取调用方传入的 priority 和动态 priority 中的较大值
+        if (mappedPriority > effectivePriority) {
+          effectivePriority = mappedPriority;
+        }
+      }
       final cacheDir = await _getCacheDirectory();
       final sourceFile = File(filePath);
 
@@ -518,8 +733,8 @@ class VideoCacheService {
         quality: quality,
         filePath: destPath,
         fileSize: fileSize,
-        priority: priority,
-        ttl: ttl,
+        priority: effectivePriority,
+        ttl: effectiveTtl,
         isComplete: true,
       );
 
@@ -547,18 +762,23 @@ class VideoCacheService {
     String quality = '720p',
   }) async {
     try {
+      // 内存压力检查
+      _periodicMemoryPressureCheck();
+
       final l2Key = _buildL2Key(videoId, segmentKey, quality);
 
-      // L2 内存缓存写入
-      _streamCache[l2Key] = _StreamCacheEntry(
-        videoId: videoId,
-        segmentKey: segmentKey,
-        quality: quality,
-        data: data,
-      );
+      // L2 内存缓存写入（内存压力严重时跳过）
+      if (_memoryPressure != MemoryPressureLevel.critical) {
+        _streamCache[l2Key] = _StreamCacheEntry(
+          videoId: videoId,
+          segmentKey: segmentKey,
+          quality: quality,
+          data: data,
+        );
 
-      // L2 淘汰：超出上限时移除最早条目
-      _evictL2IfNeeded();
+        // L2 淘汰：超出上限时移除最早条目
+        _evictL2IfNeeded();
+      }
 
       // L4 磁盘缓存写入
       final segDir = await _getSegmentDirectory();
@@ -613,12 +833,20 @@ class VideoCacheService {
     final l2Key = _buildL2Key(videoId, segmentKey, q);
     final streamEntry = _streamCache[l2Key];
     if (streamEntry != null) {
-      streamEntry.hitCount++;
-      streamEntry.lastAccess = DateTime.now();
-      _hitCount++;
-      _notifyStats();
-      _logger.d('分段命中(L2): $videoId/$segmentKey@$q');
-      return SegmentCacheResult(hit: true, data: streamEntry.data);
+      // 检查 L2 TTL 是否已过期
+      if (streamEntry.isExpired(_l2Ttl)) {
+        _streamCache.remove(l2Key);
+        _logger.d('L2 TTL 过期，移除: $videoId/$segmentKey@$q');
+      } else {
+        streamEntry.hitCount++;
+        streamEntry.lastAccess = DateTime.now();
+        _hitCount++;
+        _notifyStats();
+        _logger.d('分段命中(L2): $videoId/$segmentKey@$q');
+        // 记录观看行为
+        _recordViewingIfNeeded(videoId);
+        return SegmentCacheResult(hit: true, data: streamEntry.data);
+      }
     }
 
     // L4 磁盘缓存查询
@@ -634,6 +862,8 @@ class VideoCacheService {
         _hitCount++;
         _notifyStats();
         _logger.d('分段命中(L4): $videoId/$segmentKey@$q');
+        // 记录观看行为
+        _recordViewingIfNeeded(videoId);
         return SegmentCacheResult(hit: true, path: segPath);
       }
     }
@@ -698,11 +928,20 @@ class VideoCacheService {
 
   /// 清除所有缓存
   Future<void> clearAll() async {
+    // 取消 TTL 清理定时器
+    _ttlCleanupTimer?.cancel();
+    _ttlCleanupTimer = null;
+
     // 清除 L1
     _memoryCache.clear();
 
     // 清除 L2
     _streamCache.clear();
+
+    // 重置内存压力状态
+    _memoryPressure = MemoryPressureLevel.normal;
+    _activeVideoIds.clear();
+    _memoryCheckCounter = 0;
 
     // 清除 L3/L4 磁盘缓存
     try {
@@ -794,6 +1033,18 @@ class VideoCacheService {
     Map<String, dynamic> frameBuffer, {
     String quality = '720p',
   }) {
+    // 内存压力检查
+    _periodicMemoryPressureCheck();
+
+    // 严重内存压力下拒绝新的 L1 写入
+    if (_memoryPressure == MemoryPressureLevel.critical) {
+      _logger.w('内存压力严重，拒绝 L1 写入: $videoId@$quality');
+      return;
+    }
+
+    // 标记为活跃视频
+    _activeVideoIds.add(videoId);
+
     final key = _buildL1Key(videoId, quality);
     _memoryCache[key] = _MemoryCacheEntry(
       videoId: videoId,
@@ -811,15 +1062,36 @@ class VideoCacheService {
     final key = _buildL1Key(videoId, quality);
     final entry = _memoryCache[key];
     if (entry != null) {
+      // 检查 TTL 是否已过期
+      final ttl = _activeVideoIds.contains(videoId) ? _l1ActiveTtl : _l1InactiveTtl;
+      if (entry.isExpired(ttl)) {
+        _memoryCache.remove(key);
+        _logger.d('L1 TTL 过期，移除: $videoId@$quality');
+        _missCount++;
+        _notifyStats();
+        return null;
+      }
       entry.hitCount++;
       entry.lastAccess = DateTime.now();
       _hitCount++;
       _notifyStats();
+      // 记录观看行为
+      _recordViewingIfNeeded(videoId);
       return entry.frameBuffer;
     }
     _missCount++;
     _notifyStats();
     return null;
+  }
+
+  /// 标记视频为活跃状态（影响 TTL 策略）
+  void markVideoActive(String videoId) {
+    _activeVideoIds.add(videoId);
+  }
+
+  /// 标记视频为非活跃状态
+  void markVideoInactive(String videoId) {
+    _activeVideoIds.remove(videoId);
   }
 
   // ============================================================
@@ -1029,8 +1301,9 @@ class VideoCacheService {
     final preloadKeys = <String>[];
 
     for (final entry in _diskIndex.entries) {
-      // 优先级 <= 0 且非完整视频（预加载分段），且不在保留窗口内
-      if (entry.value.priority <= 0 &&
+      // 有效优先级 <= 0 且非完整视频（预加载分段），且不在保留窗口内
+      final effectivePri = _getEffectivePriorityForEntry(entry.value);
+      if (effectivePri <= 0 &&
           !entry.value.isComplete &&
           !_shouldKeep(entry.value)) {
         preloadKeys.add(entry.key);
@@ -1041,7 +1314,9 @@ class VideoCacheService {
     preloadKeys.sort((a, b) {
       final ea = _diskIndex[a]!;
       final eb = _diskIndex[b]!;
-      final priCmp = ea.priority.compareTo(eb.priority);
+      final priA = _getEffectivePriorityForEntry(ea);
+      final priB = _getEffectivePriorityForEntry(eb);
+      final priCmp = priA.compareTo(priB);
       if (priCmp != 0) return priCmp;
       return ea.lastAccess.compareTo(eb.lastAccess);
     });
@@ -1072,10 +1347,14 @@ class VideoCacheService {
       }
     }
 
-    // 按最后访问时间升序排列（最久未访问排前面）
+    // 按最后访问时间升序排列（最久未访问排前面），同时考虑动态优先级
     candidates.sort((a, b) {
       final ea = _diskIndex[a]!;
       final eb = _diskIndex[b]!;
+      final priA = _getEffectivePriorityForEntry(ea);
+      final priB = _getEffectivePriorityForEntry(eb);
+      // 高优先级条目排后面（不容易被淘汰）
+      if (priA != priB) return priA.compareTo(priB);
       return ea.lastAccess.compareTo(eb.lastAccess);
     });
 
@@ -1103,10 +1382,14 @@ class VideoCacheService {
       }
     }
 
-    // 按文件大小降序排列（大文件优先淘汰）
+    // 按文件大小降序排列（大文件优先淘汰），同时考虑动态优先级
     candidates.sort((a, b) {
       final ea = _diskIndex[a]!;
       final eb = _diskIndex[b]!;
+      final priA = _getEffectivePriorityForEntry(ea);
+      final priB = _getEffectivePriorityForEntry(eb);
+      // 高优先级条目排后面（不容易被淘汰）
+      if (priA != priB) return priA.compareTo(priB);
       return eb.fileSize.compareTo(ea.fileSize);
     });
 
@@ -1126,10 +1409,13 @@ class VideoCacheService {
 
   /// 判断条目是否应保留
   ///
-  /// 保留条件：用户收藏（priority >= 10）、24h 内播放记录、热门视频（hitCount >= 10）
+  /// 保留条件：用户收藏（effectivePriority >= 10）、24h 内播放记录、热门视频（hitCount >= 10）
   bool _shouldKeep(CacheEntry entry) {
+    // 使用动态优先级（如果可用）
+    final effectivePriority = _getEffectivePriorityForEntry(entry);
+
     // 用户收藏
-    if (entry.priority >= 10) return true;
+    if (effectivePriority >= 10) return true;
 
     // 24h 内播放记录
     if (DateTime.now().difference(entry.lastAccess) < _recentlyPlayedWindow) {
@@ -1196,11 +1482,277 @@ class VideoCacheService {
     }
   }
 
-  /// L1 内存缓存淘汰
-  void _evictL1IfNeeded() => _evictOldestFromMap(_memoryCache, _l1MaxEntries);
+  /// L1 内存缓存淘汰（使用动态容量）
+  void _evictL1IfNeeded() =>
+      _evictOldestFromMap(_memoryCache, _getL1MaxEntries());
 
-  /// L2 内存缓存淘汰
-  void _evictL2IfNeeded() => _evictOldestFromMap(_streamCache, _l2MaxEntries);
+  /// L2 内存缓存淘汰（使用动态容量）
+  void _evictL2IfNeeded() =>
+      _evictOldestFromMap(_streamCache, _getL2MaxEntries());
+
+  /// 根据内存压力等级计算 L1 动态最大条目数
+  int _getL1MaxEntries() {
+    switch (_memoryPressure) {
+      case MemoryPressureLevel.normal:
+        return _l1BaseMaxEntries;
+      case MemoryPressureLevel.warning:
+        return _l1BaseMaxEntries ~/ 2; // 减半
+      case MemoryPressureLevel.critical:
+        return 0; // 清空
+    }
+  }
+
+  /// 根据内存压力等级计算 L2 动态最大条目数
+  ///
+  /// 如果已接入 [CacheStrategyManager]，基础容量会乘以动态容量倍数。
+  int _getL2MaxEntries() {
+    int base;
+    switch (_memoryPressure) {
+      case MemoryPressureLevel.normal:
+        base = _l2BaseMaxEntries;
+      case MemoryPressureLevel.warning:
+        base = _l2BaseMaxEntries ~/ 2; // 减半
+      case MemoryPressureLevel.critical:
+        base = _l2MinEntries; // 最低
+    }
+    // 应用策略管理器的容量倍数
+    if (_strategyManager != null && _strategyManager!.isInitialized) {
+      final multiplier = _strategyManager!.getCapacityMultiplier();
+      return (base * multiplier).round().clamp(_l2MinEntries, _l2BaseMaxEntries * 3);
+    }
+    return base;
+  }
+
+  // ============================================================
+  // 内部方法 — 内存压力感知
+  // ============================================================
+
+  /// 检查当前内存压力等级
+  ///
+  /// 使用 ProcessInfo.currentRss 获取进程常驻集大小，
+  /// 与配置的阈值比较确定内存压力等级
+  MemoryPressureLevel _checkMemoryPressure() {
+    final rss = _memoryReader();
+    final ratio = _maxRssBytes > 0 ? rss / _maxRssBytes : 0.0;
+
+    final MemoryPressureLevel newLevel;
+    if (ratio >= _memoryCriticalThreshold) {
+      newLevel = MemoryPressureLevel.critical;
+    } else if (ratio >= _memoryWarningThreshold) {
+      newLevel = MemoryPressureLevel.warning;
+    } else {
+      newLevel = MemoryPressureLevel.normal;
+    }
+
+    if (newLevel != _memoryPressure) {
+      _logger.w('内存压力等级变更: $_memoryPressure → $newLevel '
+          '(RSS: ${(rss / 1024 / 1024).toStringAsFixed(1)}MB, '
+          '阈值: ${(_maxRssBytes / 1024 / 1024).toStringAsFixed(0)}MB)');
+      _memoryPressure = newLevel;
+
+      // 压力变更时立即执行淘汰
+      _evictL1IfNeeded();
+      _evictL2IfNeeded();
+    }
+
+    return newLevel;
+  }
+
+  /// 周期性内存压力检查（每 N 次缓存操作检查一次）
+  void _periodicMemoryPressureCheck() {
+    _memoryCheckCounter++;
+    if (_memoryCheckCounter >= _memoryCheckInterval) {
+      _memoryCheckCounter = 0;
+      _checkMemoryPressure();
+    }
+  }
+
+  // ============================================================
+  // 内部方法 — L1/L2 TTL 淘汰
+  // ============================================================
+
+  /// 淘汰过期的 L1 帧缓存条目
+  int _evictExpiredL1Entries() {
+    final expiredKeys = <String>[];
+    for (final entry in _memoryCache.entries) {
+      final videoId = entry.value.videoId;
+      final ttl =
+          _activeVideoIds.contains(videoId) ? _l1ActiveTtl : _l1InactiveTtl;
+      if (entry.value.isExpired(ttl)) {
+        expiredKeys.add(entry.key);
+      }
+    }
+    for (final key in expiredKeys) {
+      _memoryCache.remove(key);
+    }
+    if (expiredKeys.isNotEmpty) {
+      _logger.d('L1 TTL 淘汰: ${expiredKeys.length} 条');
+    }
+    return expiredKeys.length;
+  }
+
+  /// 淘汰过期的 L2 流缓存条目
+  int _evictExpiredL2Entries() {
+    final expiredKeys = <String>[];
+    for (final entry in _streamCache.entries) {
+      if (entry.value.isExpired(_l2Ttl)) {
+        expiredKeys.add(entry.key);
+      }
+    }
+    for (final key in expiredKeys) {
+      _streamCache.remove(key);
+    }
+    if (expiredKeys.isNotEmpty) {
+      _logger.d('L2 TTL 淘汰: ${expiredKeys.length} 条');
+    }
+    return expiredKeys.length;
+  }
+
+  /// 启动 TTL 定期清理定时器
+  void _startTtlCleanupTimer() {
+    _ttlCleanupTimer?.cancel();
+    _ttlCleanupTimer = Timer.periodic(_ttlCleanupInterval, (_) {
+      _ttlCleanup();
+    });
+  }
+
+  /// TTL 定期清理执行
+  void _ttlCleanup() {
+    final l1Evicted = _evictExpiredL1Entries();
+    final l2Evicted = _evictExpiredL2Entries();
+    if (l1Evicted > 0 || l2Evicted > 0) {
+      _logger.d('TTL 定期清理: L1=$l1Evicted, L2=$l2Evicted');
+    }
+    // 同时检查内存压力
+    _checkMemoryPressure();
+  }
+
+  // ============================================================
+  // 公开方法 — 内存监控接口
+  // ============================================================
+
+  /// 获取当前内存使用信息
+  ///
+  /// 返回 L1/L2 当前占用内存、进程 RSS、内存压力等级等
+  MemoryUsageInfo getMemoryUsage() {
+    int l1Bytes = 0;
+    for (final entry in _memoryCache.values) {
+      l1Bytes += entry.estimatedBytes;
+    }
+
+    int l2Bytes = 0;
+    for (final entry in _streamCache.values) {
+      l2Bytes += entry.data.length;
+    }
+
+    return MemoryUsageInfo(
+      l1Bytes: l1Bytes,
+      l2Bytes: l2Bytes,
+      processRssBytes: _memoryReader(),
+      pressureLevel: _memoryPressure,
+      l1MaxEntries: _getL1MaxEntries(),
+      l2MaxEntries: _getL2MaxEntries(),
+    );
+  }
+
+  /// 裁剪内存
+  ///
+  /// 供外部在收到系统内存警告时调用。
+  /// 立即检查内存压力并执行淘汰。
+  void trimMemory() {
+    _logger.i('trimMemory 被调用，当前压力: $_memoryPressure');
+    _checkMemoryPressure();
+
+    // 严重压力时清空 L1
+    if (_memoryPressure == MemoryPressureLevel.critical) {
+      _memoryCache.clear();
+      _logger.w('trimMemory: 内存压力严重，已清空 L1');
+    }
+
+    // 无论如何都执行 TTL 淘汰
+    _evictExpiredL1Entries();
+    _evictExpiredL2Entries();
+
+    // 按动态容量淘汰
+    _evictL1IfNeeded();
+    _evictL2IfNeeded();
+  }
+
+  /// 清空所有内存缓存（L1 + L2），不影响磁盘缓存
+  ///
+  /// 供外部在需要快速释放内存时调用（如页面切换、后台切换）。
+  /// 与 [trimMemory] 不同，此方法无条件清空所有 L1/L2 条目，
+  /// 不检查内存压力等级。
+  void clearAllMemoryCaches() {
+    final l1Count = _memoryCache.length;
+    final l2Count = _streamCache.length;
+    _memoryCache.clear();
+    _streamCache.clear();
+    _logger.i('clearAllMemoryCaches: 已清空 L1($l1Count条) + L2($l2Count条)');
+  }
+
+  /// 设置最大 RSS 阈值（用于测试或高级配置）
+  void setMaxRssBytes(int maxRssBytes) {
+    _maxRssBytes = maxRssBytes;
+  }
+
+  /// 设置内存读取函数（用于测试或注入真实实现）
+  ///
+  /// 示例：
+  /// ```dart
+  /// // 注入真实实现
+  /// import 'dart:developer' show ProcessInfo;
+  /// service.setMemoryReader(() => ProcessInfo.currentRss);
+  ///
+  /// // 测试时注入模拟值
+  /// service.setMemoryReader(() => 400 * 1024 * 1024);
+  /// ```
+  void setMemoryReader(int Function() reader) {
+    _memoryReader = reader;
+  }
+
+  // ============================================================
+  // 内部方法 — 观看行为记录
+  // ============================================================
+
+  /// 记录观看行为到策略管理器（如果可用）
+  ///
+  /// 在缓存命中时调用，用于追踪用户观看习惯。
+  void _recordViewingIfNeeded(String videoId) {
+    if (_strategyManager != null && _strategyManager!.isInitialized) {
+      try {
+        _strategyManager!.recordViewing(videoId);
+      } catch (e) {
+        _logger.w('记录观看行为失败: $e');
+      }
+    }
+  }
+
+  // ============================================================
+  // 内部方法 — 淘汰策略管理器感知的优先级
+  // ============================================================
+
+  /// 获取条目的有效优先级（用于淘汰排序）
+  ///
+  /// 如果策略管理器可用，使用动态优先级；否则使用条目自身的 priority 字段。
+  int _getEffectivePriorityForEntry(CacheEntry entry) {
+    if (_strategyManager != null && _strategyManager!.isInitialized) {
+      try {
+        final dynamicPriority =
+            _strategyManager!.getPriority(entry.videoId);
+        // 将 CachePriority 映射为数值，与 entry.priority 取较大值
+        final mappedPriority = dynamicPriority == CachePriority.high
+            ? 20
+            : dynamicPriority == CachePriority.low
+                ? -5
+                : 0;
+        return mappedPriority > entry.priority ? mappedPriority : entry.priority;
+      } catch (e) {
+        // 降级到条目自身优先级
+      }
+    }
+    return entry.priority;
+  }
 
   // ============================================================
   // 内部方法 — 统计通知
@@ -1229,8 +1781,11 @@ class VideoCacheService {
 
   /// 释放资源
   void dispose() {
+    _ttlCleanupTimer?.cancel();
+    _ttlCleanupTimer = null;
     _statsController.close();
     _memoryCache.clear();
     _streamCache.clear();
+    _activeVideoIds.clear();
   }
 }

@@ -692,9 +692,10 @@ final preloadServiceProvider = Provider<PreloadService>((ref) {
   return PreloadService(cacheService: cacheService);
 });
 
-/// 功耗管理服务
+/// 功耗管理服务（懒加载：首次访问时触发初始化）
 final powerManagerServiceProvider = Provider<PowerManagerService>((ref) {
   final service = PowerManagerService.instance;
+  service.ensureInitialized(); // 异步，不阻塞 provider 返回
   ref.onDispose(() => service.dispose());
   return service;
 });
@@ -731,14 +732,18 @@ final privacyManagerProvider = Provider<PrivacyManagerService>((ref) {
   return PrivacyManagerService.instance;
 });
 
-/// 指标采集服务
+/// 指标采集服务（懒加载：首次访问时触发初始化）
 final metricsCollectorProvider = Provider<MetricsCollectorService>((ref) {
-  return MetricsCollectorService.instance;
+  final service = MetricsCollectorService.instance;
+  service.ensureInitialized(AppDatabase.instance); // 异步，不阻塞
+  return service;
 });
 
-/// 数据上报服务
+/// 数据上报服务（懒加载：首次访问时触发初始化）
 final dataReporterProvider = Provider<DataReporterService>((ref) {
-  return DataReporterService.instance;
+  final service = DataReporterService.instance;
+  service.ensureInitialized(AppDatabase.instance); // 异步，不阻塞
+  return service;
 });
 
 /// 隐私偏好 Provider（实时监听开关变化）

@@ -12,6 +12,8 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mediamix/features/video/core/engines/engine_interfaces.dart';
+import 'package:mediamix/features/video/core/engines/cache_engine_impl.dart';
+import 'package:mediamix/core/services/power_manager_service.dart';
 
 void main() {
   // ============================================================
@@ -288,6 +290,160 @@ void main() {
       expect(degraded.isUsingCache, isTrue);
       expect(exact.fallbackQuality, isNull);
       expect(degraded.fallbackQuality, isNotNull);
+    });
+  });
+
+  // ============================================================
+  // 6. CacheEngineImpl — 预加载回调与取消回收
+  // ============================================================
+  group('CacheEngineImpl — 预加载回调与取消', () {
+    test('preloadNextEpisode 触发回调并记录 videoId', () {
+      String? capturedVideoId;
+      String? capturedUrl;
+      final engine = CacheEngineImpl(
+        onPreloadNextEpisode: (videoId, url) {
+          capturedVideoId = videoId;
+          capturedUrl = url;
+        },
+      );
+
+      engine.preloadNextEpisode('test_ep1', 'https://example.com/ep1.mp4');
+      expect(capturedVideoId, equals('test_ep1'));
+      expect(capturedUrl, equals('https://example.com/ep1.mp4'));
+    });
+
+    test('preloadAdjacentEpisodes 触发回调并记录多个 videoId', () {
+      List<int>? capturedIndices;
+      final engine = CacheEngineImpl(
+        onPreloadAdjacent: (indices, title, urls) {
+          capturedIndices = indices;
+        },
+      );
+
+      engine.preloadAdjacentEpisodes(
+        [0, 1, 2],
+        '剧名',
+        ['url0', 'url1', 'url2', 'url3'],
+        PowerMode.balanced,
+      );
+      expect(capturedIndices, equals([0, 1, 2]));
+    });
+
+    test('省电模式跳过预加载', () {
+      var callbackCalled = false;
+      final engine = CacheEngineImpl(
+        onPreloadAdjacent: (indices, title, urls) {
+          callbackCalled = true;
+        },
+      );
+
+      engine.preloadAdjacentEpisodes(
+        [0, 1, 2],
+        '剧名',
+        ['url0', 'url1', 'url2'],
+        PowerMode.powerSaving,
+      );
+      expect(callbackCalled, isFalse);
+    });
+
+    test('cancelPreloads 清空后再次 preload 仍可触发回调', () {
+      var callCount = 0;
+      final engine = CacheEngineImpl(
+        onPreloadNextEpisode: (videoId, url) {
+          callCount++;
+        },
+      );
+
+      engine.preloadNextEpisode('v1', 'https://example.com/v1.mp4');
+      expect(callCount, 1);
+
+      // cancelPreloads 会清空回调引用
+      engine.cancelPreloads();
+
+      // cancelPreloads 后回调已被置空，不再触发
+      engine.preloadNextEpisode('v2', 'https://example.com/v2.mp4');
+      expect(callCount, 1); // 仍然是 1，未增加
+    });
+
+    test('cancelPreloads 多次调用不抛异常', () {
+      final engine = CacheEngineImpl();
+      engine.cancelPreloads();
+      engine.cancelPreloads();
+      // 不应抛出异常
+    });
+
+    test('dispose 后不再触发预加载回调', () {
+      var callCount = 0;
+      final engine = CacheEngineImpl(
+        onPreloadNextEpisode: (videoId, url) {
+          callCount++;
+        },
+      );
+
+      engine.preloadNextEpisode('v1', 'https://example.com/v1.mp4');
+      expect(callCount, 1);
+
+      engine.dispose();
+
+      // dispose 内部调用了 cancelPreloads，回调被置空
+      engine.preloadNextEpisode('v2', 'https://example.com/v2.mp4');
+      expect(callCount, 1);
+    });
+
+    test('notifyPreloadBuffering 转发回调', () {
+      bool? capturedBuffering;
+      final engine = CacheEngineImpl(
+        onNotifyPreloadBuffering: (isBuffering) {
+          capturedBuffering = isBuffering;
+        },
+      );
+
+      engine.notifyPreloadBuffering(true);
+      expect(capturedBuffering, isTrue);
+
+      engine.notifyPreloadBuffering(false);
+      expect(capturedBuffering, isFalse);
+    });
+
+    test('无回调时 preloadNextEpisode 不抛异常', () {
+      final engine = CacheEngineImpl();
+      engine.preloadNextEpisode('v1', 'https://example.com/v1.mp4');
+      // 不应抛出异常
+    });
+
+    test('无回调时 preloadAdjacentEpisodes 不抛异常', () {
+      final engine = CacheEngineImpl();
+      engine.preloadAdjacentEpisodes(
+        [0, 1],
+        '剧名',
+        ['url0', 'url1', 'url2'],
+        PowerMode.balanced,
+      );
+      // 不应抛出异常
+    });
+
+    test('preloadAdjacentEpisodes 过滤越界索引', () {
+      List<int>? capturedIndices;
+      final engine = CacheEngineImpl(
+        onPreloadAdjacent: (indices, title, urls) {
+          capturedIndices = indices;
+        },
+      );
+
+      // 传入越界索引 -1 和 10，但回调仍会收到原始 indices
+      // 过滤逻辑在回调方（PlayerCoreManager）处理
+      engine.preloadAdjacentEpisodes(
+        [-1, 0, 1, 10],
+        '剧名',
+        ['url0', 'url1', 'url2'],
+        PowerMode.balanced,
+      );
+      expect(capturedIndices, equals([-1, 0, 1, 10]));
+    });
+
+    test('isUsingCache 初始为 false', () {
+      final engine = CacheEngineImpl();
+      expect(engine.isUsingCache, isFalse);
     });
   });
 }

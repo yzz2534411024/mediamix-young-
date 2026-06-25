@@ -17,6 +17,9 @@ class CacheEngineImpl implements CacheEngine {
       _preloadAdjacent;
   void Function(bool isBuffering)? _notifyPreloadBuffering;
 
+  /// 已预加载但未使用的 videoId 集合（用于回收）
+  final Set<String> _preloadedVideoIds = {};
+
   CacheEngineImpl({
     void Function(String videoId, String url)? onPreloadNextEpisode,
     void Function(List<int> indices, String title, List<String> episodeUrls)?
@@ -42,6 +45,8 @@ class CacheEngineImpl implements CacheEngine {
         _isUsingCache = true;
         PlayerMetricsService.instance.recordEvent(MetricsEvent.cacheHit);
         MetricsCollectorService.instance.recordEvent(MetricsEvent.cacheHit);
+        // 命中缓存时从预加载集合移除（已被使用）
+        _preloadedVideoIds.remove(videoId);
         return cachedPath;
       }
 
@@ -79,6 +84,7 @@ class CacheEngineImpl implements CacheEngine {
         _isUsingCache = true;
         PlayerMetricsService.instance.recordEvent(MetricsEvent.cacheHit);
         MetricsCollectorService.instance.recordEvent(MetricsEvent.cacheHit);
+        _preloadedVideoIds.remove(videoId);
         return CacheResolveResult(url: exactPath, isUsingCache: true);
       }
 
@@ -89,6 +95,7 @@ class CacheEngineImpl implements CacheEngine {
         _isUsingCache = true;
         PlayerMetricsService.instance.recordEvent(MetricsEvent.cacheHit);
         MetricsCollectorService.instance.recordEvent(MetricsEvent.cacheHit);
+        _preloadedVideoIds.remove(videoId);
         return CacheResolveResult(
           url: fallback.path,
           isUsingCache: true,
@@ -124,6 +131,7 @@ class CacheEngineImpl implements CacheEngine {
 
   @override
   void preloadNextEpisode(String videoId, String url) {
+    _preloadedVideoIds.add(videoId);
     _preloadNextEpisode?.call(videoId, url);
   }
 
@@ -134,13 +142,39 @@ class CacheEngineImpl implements CacheEngine {
       _logger.d('省电模式，跳过预加载');
       return;
     }
+    // 记录预加载的 videoId
+    for (final i in indices) {
+      if (i >= 0 && i < episodeUrls.length) {
+        _preloadedVideoIds.add('${title}_$i');
+      }
+    }
     _preloadAdjacent?.call(indices, title, episodeUrls);
   }
 
   @override
-  void dispose() {
+  void cancelPreloads() {
+    // 标记未使用的预加载为非活跃，让缓存服务自身的淘汰策略回收
+    final unusedIds = List<String>.from(_preloadedVideoIds);
+    _preloadedVideoIds.clear();
+
+    for (final videoId in unusedIds) {
+      try {
+        VideoCacheService.instance.markVideoInactive(videoId);
+        _logger.d('标记未使用预加载为非活跃: $videoId');
+      } catch (e) {
+        _logger.w('标记预加载非活跃失败: $videoId, 错误: $e');
+      }
+    }
+
+    // 清空回调引用，阻止后续预加载触发
     _preloadNextEpisode = null;
     _preloadAdjacent = null;
+    _logger.i('已取消所有预加载并回收资源（${unusedIds.length} 项）');
+  }
+
+  @override
+  void dispose() {
+    cancelPreloads();
     _notifyPreloadBuffering = null;
   }
 }

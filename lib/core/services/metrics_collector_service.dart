@@ -27,6 +27,9 @@ class MetricsCollectorService {
   /// 数据库实例（由 initialize 注入）
   AppDatabase? _db;
 
+  /// 懒加载初始化 Completer（线程安全）
+  Completer<void>? _initCompleter;
+
   /// PlayerMetricsService 事件订阅
   StreamSubscription<PlaybackMetrics>? _metricsSubscription;
 
@@ -49,6 +52,22 @@ class MetricsCollectorService {
     );
 
     _logger.i('指标采集服务已初始化');
+  }
+
+  /// 确保服务已初始化（懒加载入口）
+  ///
+  /// 首次调用时执行初始化，后续调用直接返回。
+  /// 多个并发调用会等待同一个 Completer，保证线程安全。
+  Future<void> ensureInitialized(AppDatabase db) async {
+    if (_initialized) return;
+    if (_initCompleter != null) return _initCompleter!.future;
+    _initCompleter = Completer<void>();
+    try {
+      initialize(db);
+      _initCompleter!.complete();
+    } catch (e) {
+      if (!_initCompleter!.isCompleted) _initCompleter!.complete();
+    }
   }
 
   /// 记录单个事件（由 PlayerPage 调用）

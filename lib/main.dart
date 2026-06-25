@@ -6,14 +6,9 @@ import 'app/router.dart';
 import 'core/services/theme_provider.dart';
 import 'core/services/video_cache_service.dart';
 import 'features/video/models/video_models.dart';
-import 'core/services/power_manager_service.dart';
 import 'core/services/privacy_manager_service.dart';
-import 'core/services/metrics_collector_service.dart';
-import 'core/services/data_reporter_service.dart';
-import 'core/database/database.dart';
 import 'core/network/network_engine.dart';
 import 'core/network/proxy_config_service.dart';
-import 'core/services/device_capability_service.dart';
 import 'core/services/local_proxy_server.dart';
 import 'core/widgets/privacy_consent_dialog.dart';
 import 'features/video/services/spider/java_bridge_manager.dart';
@@ -29,46 +24,46 @@ void main() async {
   runApp(const ProviderScope(child: YoungApp()));
 }
 
-/// 初始化关键服务 — 每个服务独立 try-catch，任一个失败都不阻塞启动
+/// 初始化关键服务 — 并行初始化关键路径服务，非关键服务懒加载
+///
+/// 关键路径服务（并行初始化）：
+///   - VideoCacheService：磁盘 I/O，播放核心依赖
+///   - PrivacyManagerService：隐私授权状态，UI 立即需要
+///   - ProxyConfigService：网络代理配置，网络请求依赖
+///
+/// 懒加载服务（首次使用时初始化）：
+///   - PowerManagerService、MetricsCollectorService、
+///     DataReporterService、DeviceCapabilityService
 Future<void> _initCriticalServices() async {
-  // 视频缓存服务
-  try {
-    await VideoCacheService.instance.initialize();
-  } catch (e) {
-    debugPrint('缓存服务初始化失败: $e');
-  }
+  // 并行初始化关键路径服务
+  await Future.wait([
+    // 视频缓存服务
+    () async {
+      try {
+        await VideoCacheService.instance.initialize();
+      } catch (e) {
+        debugPrint('缓存服务初始化失败: $e');
+      }
+    }(),
+    // 隐私管理服务
+    () async {
+      try {
+        await PrivacyManagerService.instance.initialize();
+      } catch (e) {
+        debugPrint('隐私管理服务初始化失败: $e');
+      }
+    }(),
+    // 代理配置
+    () async {
+      try {
+        await ProxyConfigService.instance.initialize();
+      } catch (e) {
+        debugPrint('代理配置初始化失败: $e');
+      }
+    }(),
+  ]);
 
-  // 功耗管理服务
-  try {
-    await PowerManagerService.instance.initialize();
-  } catch (e) {
-    debugPrint('功耗管理服务初始化失败: $e');
-  }
-
-  // 隐私管理服务
-  try {
-    await PrivacyManagerService.instance.initialize();
-  } catch (e) {
-    debugPrint('隐私管理服务初始化失败: $e');
-  }
-
-  // 指标采集和数据上报
-  try {
-    MetricsCollectorService.instance.initialize(AppDatabase.instance);
-    await DataReporterService.instance.initialize(AppDatabase.instance);
-  } catch (e) {
-    debugPrint('指标服务初始化失败: $e');
-  }
-
-  // 代理配置和设备能力检测
-  try {
-    await ProxyConfigService.instance.initialize();
-    await DeviceCapabilityService.instance.getCapabilityReport();
-  } catch (e) {
-    debugPrint('代理/设备检测初始化失败: $e');
-  }
-
-  // Java Bridge 蜘蛛引擎初始化
+  // Java Bridge 蜘蛛引擎初始化（非阻塞，保持原有逻辑）
   try {
     final bridgeManager = JavaBridgeManager.instance;
     // 尝试从内置 TVBox 源获取蜘蛛 JAR 并启动 Bridge

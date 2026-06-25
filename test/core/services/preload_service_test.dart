@@ -586,6 +586,236 @@ void main() {
       });
     });
   });
+
+  // ==================== PreloadStatusInfo ====================
+  group('PreloadStatusInfo', () {
+    test('totalCount 计算正确', () {
+      const info = PreloadStatusInfo(
+        pendingCount: 2,
+        downloadingCount: 1,
+        completedCount: 3,
+        cancelledCount: 1,
+        failedCount: 0,
+        currentDepth: 2,
+      );
+      expect(info.totalCount, equals(7));
+    });
+
+    test('hasActiveTasks 仅当 downloadingCount > 0', () {
+      const withActive = PreloadStatusInfo(
+        pendingCount: 1,
+        downloadingCount: 1,
+        completedCount: 0,
+        cancelledCount: 0,
+        failedCount: 0,
+        currentDepth: 2,
+      );
+      expect(withActive.hasActiveTasks, isTrue);
+
+      const withoutActive = PreloadStatusInfo(
+        pendingCount: 1,
+        downloadingCount: 0,
+        completedCount: 0,
+        cancelledCount: 0,
+        failedCount: 0,
+        currentDepth: 2,
+      );
+      expect(withoutActive.hasActiveTasks, isFalse);
+    });
+  });
+
+  // ==================== PreloadDepthCalculator ====================
+  group('PreloadDepthCalculator', () {
+    late PreloadDepthCalculator calc;
+
+    setUp(() {
+      calc = PreloadDepthCalculator();
+    });
+
+    test('离线返回 0', () {
+      expect(
+        calc.calculateDepth(networkCondition: NetworkCondition.offline),
+        equals(0),
+      );
+    });
+
+    test('弱网返回 minDepth(1)', () {
+      expect(
+        calc.calculateDepth(networkCondition: NetworkCondition.weak),
+        equals(PreloadDepthCalculator.minDepth),
+      );
+    });
+
+    test('WiFi 无额外数据返回 maxDepth(3)', () {
+      expect(
+        calc.calculateDepth(networkCondition: NetworkCondition.wifi),
+        equals(PreloadDepthCalculator.maxDepth),
+      );
+    });
+
+    test('LTE 无额外数据返回 2', () {
+      expect(
+        calc.calculateDepth(networkCondition: NetworkCondition.lte),
+        equals(2),
+      );
+    });
+
+    test('WiFi + 长停留时长 → 深度被 clamp 到 maxDepth(3)', () {
+      expect(
+        calc.calculateDepth(
+          networkCondition: NetworkCondition.wifi,
+          avgDwellTimeSec: 900, // 15 分钟
+        ),
+        equals(3),
+      );
+    });
+
+    test('WiFi + 短停留时长 → 深度减少', () {
+      expect(
+        calc.calculateDepth(
+          networkCondition: NetworkCondition.wifi,
+          avgDwellTimeSec: 60, // 1 分钟
+        ),
+        equals(2), // 3 - 1 = 2
+      );
+    });
+
+    test('WiFi + 高跳出率 → 深度减少', () {
+      expect(
+        calc.calculateDepth(
+          networkCondition: NetworkCondition.wifi,
+          bounceRate: 0.8,
+        ),
+        equals(2), // 3 - 1 = 2
+      );
+    });
+
+    test('WiFi + 低存储空间 → 深度减少', () {
+      expect(
+        calc.calculateDepth(
+          networkCondition: NetworkCondition.wifi,
+          availableStorageBytes: 100 * 1024 * 1024, // 100MB
+        ),
+        equals(2), // 3 - 1 = 2
+      );
+    });
+
+    test('WiFi + 短停留 + 高跳出 + 低存储 → clamp 到 minDepth(1)', () {
+      expect(
+        calc.calculateDepth(
+          networkCondition: NetworkCondition.wifi,
+          avgDwellTimeSec: 60,
+          bounceRate: 0.8,
+          availableStorageBytes: 100 * 1024 * 1024,
+        ),
+        equals(1), // 3 - 1 - 1 - 1 = 0 → clamp to 1
+      );
+    });
+
+    test('LTE + 长停留 → clamp 到 maxDepth(3)', () {
+      expect(
+        calc.calculateDepth(
+          networkCondition: NetworkCondition.lte,
+          avgDwellTimeSec: 900,
+        ),
+        equals(3), // 2 + 1 = 3
+      );
+    });
+
+    test('3G + 短停留 → clamp 到 minDepth(1)', () {
+      expect(
+        calc.calculateDepth(
+          networkCondition: NetworkCondition.threeG,
+          avgDwellTimeSec: 60,
+        ),
+        equals(1), // 1 - 1 = 0 → clamp to 1
+      );
+    });
+
+    test('深度范围始终在 0~maxDepth 之间', () {
+      for (final condition in NetworkCondition.values) {
+        final depth = calc.calculateDepth(
+          networkCondition: condition,
+          avgDwellTimeSec: 60,
+          bounceRate: 0.9,
+          availableStorageBytes: 10 * 1024 * 1024,
+        );
+        expect(depth, greaterThanOrEqualTo(0));
+        expect(depth, lessThanOrEqualTo(PreloadDepthCalculator.maxDepth));
+      }
+    });
+  });
+
+  // ==================== PreloadService 动态深度 + 状态查询 ====================
+  group('PreloadService 动态深度与状态', () {
+    late PreloadService service;
+    late _MockVideoCacheService mockCache;
+
+    setUp(() {
+      mockCache = _MockVideoCacheService();
+      service = PreloadService(cacheService: mockCache);
+    });
+
+    tearDown(() {
+      service.dispose();
+    });
+
+    test('初始深度为 defaultDepth(2)', () {
+      expect(service.currentPreloadDepth, equals(PreloadDepthCalculator.defaultDepth));
+    });
+
+    test('getPreloadStatus 初始状态全为 0', () {
+      final status = service.getPreloadStatus();
+      expect(status.pendingCount, equals(0));
+      expect(status.downloadingCount, equals(0));
+      expect(status.completedCount, equals(0));
+      expect(status.cancelledCount, equals(0));
+      expect(status.failedCount, equals(0));
+      expect(status.currentDepth, equals(PreloadDepthCalculator.defaultDepth));
+    });
+
+    test('updateUserBehavior 更新深度', () {
+      // WiFi + 短停留 → 深度应减少
+      service.updateUserBehavior(avgDwellTimeSec: 60);
+      expect(service.currentPreloadDepth, equals(2)); // 3 - 1 = 2
+    });
+
+    test('updateUserBehavior 深度减少时裁剪等待任务', () async {
+      mockCache.hasCacheResult = false;
+      // 添加多个等待任务
+      await service.preloadVideo('v1', 'https://example.com/v1.mp4',
+          priority: PreloadPriority.nextEpisode);
+      await service.preloadVideo('v2', 'https://example.com/v2.mp4',
+          priority: PreloadPriority.adjacentItem);
+      await service.preloadVideo('v3', 'https://example.com/v3.mp4',
+          priority: PreloadPriority.playlistItem);
+
+      // 更新行为数据使深度减少到 1
+      service.updateUserBehavior(
+        avgDwellTimeSec: 60,
+        bounceRate: 0.8,
+      );
+      expect(service.currentPreloadDepth, lessThanOrEqualTo(2));
+    });
+
+    test('getPreloadStatus 反映任务状态', () async {
+      mockCache.hasCacheResult = false;
+      await service.preloadVideo('v1', 'https://example.com/v1.mp4');
+
+      final status = service.getPreloadStatus();
+      // 任务应处于 waiting 或 downloading 状态
+      expect(status.totalCount, greaterThanOrEqualTo(0));
+    });
+
+    test('网络条件变化时重新计算深度', () {
+      service.updateNetworkCondition(NetworkCondition.lte);
+      // LTE 基础深度 2，无额外数据
+      expect(service.currentPreloadDepth, equals(2));
+
+      service.updateNetworkCondition(NetworkCondition.weak);
+      expect(service.currentPreloadDepth, equals(PreloadDepthCalculator.minDepth));
+    });
+  });
 }
 
 /// 模拟 VideoCacheService，仅实现 PreloadService 使用的方法

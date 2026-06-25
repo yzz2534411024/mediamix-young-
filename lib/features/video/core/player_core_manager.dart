@@ -148,6 +148,8 @@ class PlayerCoreManager extends ChangeNotifier {
 
   // 预加载 / 倍速 / 画中画 / 功耗 / 加载状态
   bool _hasTriggeredNextEpisodePreload = false;
+  /// 动态预加载深度（1-3），由外部根据用户行为数据更新
+  int _preloadDepth = 1;
   Timer? _speedIndicatorTimer;
   bool _isInBackground = false, _isInPipMode = false;
   int? _pipSavedQualityIndex;
@@ -251,6 +253,9 @@ class PlayerCoreManager extends ChangeNotifier {
     _bufferManager.onBufferStateChanged = _onBufferStateChanged;
     _abrController.onQualityChanged = _onQualityChanged;
 
+    // 4.5 加载历史带宽数据
+    try { NetworkEngine.instance.loadHistoryBandwidth(); } catch (_) {}
+
     // 5. 设置播放参数（在打开视频前）
     _currentEpisodeIndex = episodeIndex ?? 0;
     _currentEpisodeName = title;
@@ -296,6 +301,12 @@ class PlayerCoreManager extends ChangeNotifier {
     _bufferSubscription = _player.stream.buffer.listen((buf) {
       _bufferManager.updateBuffer(buf);
       _abrController.updateBuffer(buf);
+      // 同步吞吐量预测到 ABR 控制器
+      try {
+        _abrController.updateThroughputPrediction(
+          NetworkEngine.instance.getThroughputPrediction(),
+        );
+      } catch (_) {}
       if (_isLoading && buf > Duration.zero) _isLoading = false;
       _bufferPercent = _bufferManager.bufferPercent;
       _notifyIfNotInitializing();
@@ -321,6 +332,12 @@ class PlayerCoreManager extends ChangeNotifier {
       _networkConditionSubscription = NetworkEngine.instance.onConditionChanged.listen((c) {
         _bufferManager.updateNetworkCondition(c);
         _networkSpeedText = _formatNetworkSpeed(NetworkEngine.instance.currentBandwidthKbps);
+        // 同步吞吐量预测到 ABR 控制器
+        try {
+          _abrController.updateThroughputPrediction(
+            NetworkEngine.instance.getThroughputPrediction(),
+          );
+        } catch (_) {}
         _notifyIfNotInitializing();
       });
       _bufferManager.updateNetworkCondition(NetworkEngine.instance.currentCondition);
@@ -363,6 +380,8 @@ class PlayerCoreManager extends ChangeNotifier {
 
     _metricsEngine.endSession();
     _savePlaybackProgress();
+    // 保存带宽历史数据
+    try { NetworkEngine.instance.saveHistoryBandwidth(); } catch (_) {}
 
     // 先取消所有定时器
     for (final t in [_progressSaveTimer, _firstFrameTimeout, _seekOverlayTimer, _speedIndicatorTimer, _avSyncCheckTimer]) {
@@ -373,6 +392,9 @@ class PlayerCoreManager extends ChangeNotifier {
     for (final s in [_completedSubscription, _positionSubscription, _bufferSubscription, _errorSubscription, _playingSubscription, _networkConditionSubscription]) {
       s?.cancel();
     }
+
+    // 取消预加载并回收资源（在引擎 dispose 前显式调用）
+    _cacheEngine.cancelPreloads();
 
     // 释放引擎
     _cacheEngine.dispose();
@@ -511,8 +533,18 @@ class PlayerCoreManager extends ChangeNotifier {
 
   void preloadAdjacentEpisodes() {
     if (_isDisposed || _episodeUrls == null) return;
-    final indices = [for (int i = -1; i <= 1; i++) _currentEpisodeIndex + i].where((i) => i >= 0 && i < _episodeUrls!.length).toList();
+    // 根据动态深度计算预加载范围
+    final depth = _preloadDepth.clamp(1, 3);
+    final indices = [for (int i = -depth; i <= depth; i++) _currentEpisodeIndex + i]
+        .where((i) => i >= 0 && i < _episodeUrls!.length)
+        .where((i) => i != _currentEpisodeIndex) // 排除当前集
+        .toList();
     _cacheEngine.preloadAdjacentEpisodes(indices, _title, _episodeUrls!, _powerMode);
+  }
+
+  /// 更新预加载深度（1-3），由外部根据用户行为数据调用
+  void setPreloadDepth(int depth) {
+    _preloadDepth = depth.clamp(1, 3);
   }
 
   int findNextUntriedQuality() => _errorHandler.findNextUntriedQuality();

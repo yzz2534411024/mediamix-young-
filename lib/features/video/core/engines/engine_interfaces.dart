@@ -47,6 +47,9 @@ abstract class CacheEngine {
     PowerMode powerMode,
   );
 
+  /// 取消所有进行中的预加载任务并释放已预加载资源
+  void cancelPreloads();
+
   /// 释放资源
   void dispose();
 }

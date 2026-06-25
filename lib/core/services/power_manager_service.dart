@@ -131,6 +131,9 @@ class PowerManagerService {
   bool _isInitialized = false;
   bool _hasUserOverride = false;
 
+  /// 懒加载初始化 Completer（线程安全）
+  Completer<void>? _initCompleter;
+
   /// 模式变更控制器
   final StreamController<PowerMode> _modeController =
       StreamController<PowerMode>.broadcast();
@@ -150,6 +153,23 @@ class PowerManagerService {
 
   /// 是否已初始化
   bool get isInitialized => _isInitialized;
+
+  /// 确保服务已初始化（懒加载入口）
+  ///
+  /// 首次调用时执行初始化，后续调用直接返回。
+  /// 多个并发调用会等待同一个 Completer，保证线程安全。
+  Future<void> ensureInitialized() async {
+    if (_isInitialized) return;
+    if (_initCompleter != null) return _initCompleter!.future;
+    _initCompleter = Completer<void>();
+    try {
+      await initialize();
+      _initCompleter!.complete();
+    } catch (e) {
+      // initialize() 内部已 catch，这里兜底
+      if (!_initCompleter!.isCompleted) _initCompleter!.complete();
+    }
+  }
 
   /// 是否存在用户手动覆盖
   bool get hasUserOverride => _hasUserOverride;
@@ -339,5 +359,6 @@ class PowerManagerService {
     _hasUserOverride = false;
     _currentMode = PowerMode.balanced;
     _batteryInfo = BatteryInfo.fallback;
+    _initCompleter = null;
   }
 }

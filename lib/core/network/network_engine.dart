@@ -1,19 +1,60 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'proxy_config_service.dart';
 import 'package:logger/logger.dart';
 
+// ==================== 吞吐量预测结果 ====================
+
+/// 吞吐量预测结果
+class ThroughputPrediction {
+  /// 预测吞吐量（Kbps）
+  final double predictedKbps;
+  /// 置信度（0.0 - 1.0），样本方差越小置信度越高
+  final double confidence;
+  /// 短期趋势（Kbps），正数表示带宽在增长
+  final double trendKbps;
+  /// 长期均值（Kbps）
+  final double longTermAverageKbps;
+  /// 历史带宽稳定性（0.0 - 1.0），基于变异系数
+  final double stability;
+
+  const ThroughputPrediction({
+    required this.predictedKbps,
+    required this.confidence,
+    required this.trendKbps,
+    required this.longTermAverageKbps,
+    required this.stability,
+  });
+
+  /// 空预测（无数据时）
+  static const empty = ThroughputPrediction(
+    predictedKbps: 0,
+    confidence: 0,
+    trendKbps: 0,
+    longTermAverageKbps: 0,
+    stability: 0,
+  );
+}
+
 // ==================== 带宽估算器 ====================
 
-/// 带宽估算器 - 使用 EWMA 算法平滑带宽估算
+/// 带宽估算器 - 使用 Holt's 双指数平滑算法进行吞吐量预测
+///
+/// 保留最近 20 个吞吐量样本，区分短期趋势和长期均值。
+/// 提供置信度计算和吞吐量预测能力。
 class BandwidthEstimator {
-  // EWMA 平滑因子，越大越偏向新样本
-  static const double _alpha = 0.7;
+  // ---- Holt's 线性趋势参数 ----
+  // 水平平滑因子（自适应，根据置信度动态调整）
+  static const double _baseAlpha = 0.3;
+  // 趋势平滑因子
+  static const double _beta = 0.1;
 
-  // 当前估算带宽（Kbps）
+  // 当前估算带宽（Kbps）— EWMA
   double _estimatedBandwidthKbps = 0;
 
   // 是否已有初始估算
@@ -36,6 +77,14 @@ class BandwidthEstimator {
   // 带宽变化通知流控制器
   final _bandwidthController = StreamController<double>.broadcast();
 
+  // ---- Holt's 线性趋势状态 ----
+  double _level = 0;   // 水平分量
+  double _trend = 0;   // 趋势分量（Kbps/样本）
+  bool _holtInitialized = false;
+
+  // ---- 历史带宽持久化 ----
+  static const String _prefsKey = 'bandwidth_history_kbps';
+
   /// 当前估算带宽（Kbps）
   double get currentBandwidthKbps => _estimatedBandwidthKbps;
 
@@ -44,6 +93,9 @@ class BandwidthEstimator {
 
   /// 带宽变化通知流
   Stream<double> get onBandwidthChanged => _bandwidthController.stream;
+
+  /// 当前 Holt's 趋势值（Kbps/样本），正数表示带宽在增长
+  double get currentTrend => _trend;
 
   /// 记录一次下载并更新带宽估算（带连接键，用于多 CDN 场景）
   void recordSample({
@@ -86,9 +138,14 @@ class BandwidthEstimator {
       _estimatedBandwidthKbps = kbps;
       _initialized = true;
     } else {
+      // 使用自适应 alpha：置信度高时更信任历史，低时更信任新样本
+      final adaptiveAlpha = _computeAdaptiveAlpha();
       _estimatedBandwidthKbps =
-          _alpha * kbps + (1 - _alpha) * _estimatedBandwidthKbps;
+          adaptiveAlpha * kbps + (1 - adaptiveAlpha) * _estimatedBandwidthKbps;
     }
+
+    // 更新 Holt's 线性趋势
+    _updateHolt(kbps);
 
     // 更新峰值
     if (_estimatedBandwidthKbps > _peak) {
@@ -96,6 +153,46 @@ class BandwidthEstimator {
     }
 
     _bandwidthController.add(_estimatedBandwidthKbps);
+  }
+
+  /// 更新 Holt's 双指数平滑
+  void _updateHolt(double kbps) {
+    if (!_holtInitialized) {
+      _level = kbps;
+      _trend = 0;
+      _holtInitialized = true;
+      return;
+    }
+    final prevLevel = _level;
+    // 自适应 alpha：置信度高时 alpha 小（更平滑），低时 alpha 大（更敏感）
+    final adaptiveAlpha = _computeAdaptiveAlpha();
+    _level = adaptiveAlpha * kbps + (1 - adaptiveAlpha) * (_level + _trend);
+    _trend = _beta * (_level - prevLevel) + (1 - _beta) * _trend;
+  }
+
+  /// 根据置信度计算自适应 alpha
+  /// 置信度高（方差小）→ alpha 小 → 更平滑
+  /// 置信度低（方差大）→ alpha 大 → 更敏感
+  double _computeAdaptiveAlpha() {
+    if (_samples.length < 3) return _baseAlpha;
+    final mean = windowAverage();
+    if (mean <= 0) return _baseAlpha;
+    final variance = _computeVariance(mean);
+    final cv = math.sqrt(variance) / mean; // 变异系数
+    // cv 越大 → 越不稳定 → alpha 越大（更信任新样本）
+    // 将 cv 映射到 [0.1, 0.7] 区间
+    final adaptive = (_baseAlpha + cv).clamp(0.1, 0.7);
+    return adaptive;
+  }
+
+  /// 计算样本方差
+  double _computeVariance(double mean) {
+    if (_samples.length < 2) return 0;
+    double sumSq = 0;
+    for (final s in _samples) {
+      sumSq += (s - mean) * (s - mean);
+    }
+    return sumSq / _samples.length;
   }
 
   /// 返回当前带宽估算值（Kbps）
@@ -110,6 +207,85 @@ class BandwidthEstimator {
     return _samples.reduce((a, b) => a + b) / _samples.length;
   }
 
+  /// 计算吞吐量置信度（0.0 - 1.0）
+  ///
+  /// 样本方差越小，置信度越高。使用变异系数（CV）映射到 [0, 1]。
+  double computeConfidence() {
+    if (_samples.length < 2) return 0.0;
+    final mean = windowAverage();
+    if (mean <= 0) return 0.0;
+    final variance = _computeVariance(mean);
+    final cv = math.sqrt(variance) / mean;
+    // cv=0 → 置信度=1，cv>=1 → 置信度≈0
+    return (1.0 - cv).clamp(0.0, 1.0);
+  }
+
+  /// 计算历史带宽稳定性（0.0 - 1.0）
+  ///
+  /// 基于最近 N 个样本的变异系数，越稳定值越高。
+  double computeStability() {
+    return computeConfidence(); // 稳定性与置信度使用相同算法
+  }
+
+  /// 获取吞吐量预测结果
+  ///
+  /// 综合 Holt's 趋势、置信度和稳定性，返回完整的预测模型。
+  ThroughputPrediction getPrediction() {
+    if (_samples.isEmpty) return ThroughputPrediction.empty;
+
+    final mean = windowAverage();
+    final confidence = computeConfidence();
+    final stability = computeStability();
+
+    // Holt's 预测：level + trend（向前预测1步）
+    final holtPredict = _holtInitialized ? _level + _trend : mean;
+
+    // 最终预测：Holt's 预测与 EWMA 的加权平均
+    // 置信度高时更信任 Holt's，低时更信任 EWMA
+    final predicted = confidence > 0.3
+        ? holtPredict * 0.6 + _estimatedBandwidthKbps * 0.4
+        : _estimatedBandwidthKbps * 0.7 + holtPredict * 0.3;
+
+    return ThroughputPrediction(
+      predictedKbps: predicted.clamp(0.0, double.infinity),
+      confidence: confidence,
+      trendKbps: _trend,
+      longTermAverageKbps: mean,
+      stability: stability,
+    );
+  }
+
+  /// 使用历史带宽数据初始化估算器
+  ///
+  /// 启动时调用，将上次会话的带宽统计作为初始估计。
+  Future<void> loadHistoryBandwidth() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final saved = prefs.getDouble(_prefsKey);
+      if (saved != null && saved > 0 && !_initialized) {
+        _estimatedBandwidthKbps = saved;
+        _level = saved;
+        _initialized = true;
+        _holtInitialized = true;
+      }
+    } catch (_) {
+      // SharedPreferences 不可用时静默忽略
+    }
+  }
+
+  /// 保存当前带宽统计到持久化存储
+  ///
+  /// 每次播放结束后调用，用于下次启动时的初始估计。
+  Future<void> saveHistoryBandwidth() async {
+    if (_estimatedBandwidthKbps <= 0) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setDouble(_prefsKey, _estimatedBandwidthKbps);
+    } catch (_) {
+      // 静默忽略
+    }
+  }
+
   /// 重置估算器状态
   void reset() {
     _estimatedBandwidthKbps = 0;
@@ -118,6 +294,9 @@ class BandwidthEstimator {
     _samples.clear();
     _slowStartCount.clear();
     _slowStartOrder.clear();
+    _level = 0;
+    _trend = 0;
+    _holtInitialized = false;
   }
 
   /// 释放资源
@@ -317,6 +496,21 @@ class NetworkEngine {
   /// 带宽变化通知流
   Stream<double> get onBandwidthChanged =>
       _bandwidthEstimator.onBandwidthChanged;
+
+  /// 获取吞吐量预测结果
+  ThroughputPrediction getThroughputPrediction() =>
+      _bandwidthEstimator.getPrediction();
+
+  /// 加载历史带宽数据（启动时调用）
+  Future<void> loadHistoryBandwidth() =>
+      _bandwidthEstimator.loadHistoryBandwidth();
+
+  /// 保存当前带宽统计（播放结束时调用）
+  Future<void> saveHistoryBandwidth() =>
+      _bandwidthEstimator.saveHistoryBandwidth();
+
+  /// 获取带宽估算器引用（供 ABR 控制器使用）
+  BandwidthEstimator get bandwidthEstimator => _bandwidthEstimator;
 
   // ---- 网络条件感知 ----
 

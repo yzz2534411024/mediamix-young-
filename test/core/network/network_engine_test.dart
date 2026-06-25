@@ -114,21 +114,24 @@ void main() {
         final sub = detector.onConditionChanged.listen(conditions.add);
 
         // offline → weak
-        estimator.addSample(10000, 1000); // 80 kbps
-        await Future<void>.delayed(const Duration(milliseconds: 50));
+        // EWMA(baseAlpha=0.3): 首次=160 → weak(<300)
+        estimator.addSample(20000, 1000); // 160 kbps
+        await Future<void>.delayed(const Duration(milliseconds: 100));
 
         // weak → threeG
-        estimator.addSample(50000, 1000); // 400 kbps
-        await Future<void>.delayed(const Duration(milliseconds: 50));
+        // EWMA: 0.7*1200 + 0.3*160 = 888 → threeG(300-1000)
+        estimator.addSample(150000, 1000); // 1200 kbps
+        await Future<void>.delayed(const Duration(milliseconds: 100));
 
         // threeG → lte
-        estimator.addSample(200000, 1000); // 1600 kbps
-        await Future<void>.delayed(const Duration(milliseconds: 50));
+        // EWMA: 0.7*4000 + 0.3*888 ≈ 3066 → lte(1000-5000)
+        estimator.addSample(500000, 1000); // 4000 kbps
+        await Future<void>.delayed(const Duration(milliseconds: 100));
 
         // lte → wifi
-        // EWMA(α=0.7) 平滑后需 ≥5000 才触发 wifi，7200kbps 足够
-        estimator.addSample(900000, 1000); // 7200 kbps → EWMA ≈ 5432 → wifi
-        await Future<void>.delayed(const Duration(milliseconds: 50));
+        // EWMA: 0.7*16000 + 0.3*3066 ≈ 12120 → wifi(>5000)
+        estimator.addSample(2000000, 1000); // 16000 kbps
+        await Future<void>.delayed(const Duration(milliseconds: 100));
 
         expect(conditions, equals([
           NetworkCondition.weak,

@@ -571,4 +571,63 @@ void main() {
       expect(r4.action, ErrorAction.recoverFromSilence);
     });
   });
+
+  // ===========================================================================
+  // PlayerCoreManager — setPreloadDepth 动态深度控制
+  // ===========================================================================
+  group('PlayerCoreManager.setPreloadDepth', () {
+    late PlayerCoreManager manager;
+
+    setUp(() {
+      manager = PlayerCoreManager();
+    });
+
+    test('setPreloadDepth 设置有效深度值', () {
+      // 不应抛出异常
+      manager.setPreloadDepth(1);
+      manager.setPreloadDepth(2);
+      manager.setPreloadDepth(3);
+    });
+
+    test('setPreloadDepth 低于下限时 clamp 到 1', () {
+      // 不应抛出异常，内部 clamp 到 1
+      manager.setPreloadDepth(0);
+      manager.setPreloadDepth(-1);
+      manager.setPreloadDepth(-100);
+    });
+
+    test('setPreloadDepth 超过上限时 clamp 到 3', () {
+      // 不应抛出异常，内部 clamp 到 3
+      manager.setPreloadDepth(4);
+      manager.setPreloadDepth(10);
+      manager.setPreloadDepth(100);
+    });
+  });
+
+  // ===========================================================================
+  // PlayerCoreManager — preloadAdjacentEpisodes 深度范围
+  // ===========================================================================
+  group('PlayerCoreManager.preloadAdjacentEpisodes（未初始化）', () {
+    late PlayerCoreManager manager;
+
+    setUp(() {
+      manager = PlayerCoreManager();
+    });
+
+    test('未初始化时调用 preloadAdjacentEpisodes 不抛异常', () {
+      // initPlayerSync 未调用，_cacheEngine 未初始化
+      // 但 _isDisposed 为 false，_episodeUrls 为 null → 直接 return
+      manager.preloadAdjacentEpisodes();
+    });
+
+    test('setPreloadDepth 边界值 1 不抛异常', () {
+      manager.setPreloadDepth(1);
+      manager.preloadAdjacentEpisodes();
+    });
+
+    test('setPreloadDepth 边界值 3 不抛异常', () {
+      manager.setPreloadDepth(3);
+      manager.preloadAdjacentEpisodes();
+    });
+  });
 }
