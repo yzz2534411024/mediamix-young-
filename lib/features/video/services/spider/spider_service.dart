@@ -167,6 +167,13 @@ class SpiderService {
     JavaBridgeManager.instance.shutdown();
   }
 
+  /// 关闭内部 Dio 实例，释放 HTTP 连接池资源
+  ///
+  /// 注意：不会影响已创建的 JavaBridge 蜘蛛实例。
+  void close() {
+    _dio.close();
+  }
+
   /// 从 bytes 提取 JSON（尝试 UTF-8 解码后直接解析）
   Map<String, dynamic>? _extractJsonFromBytes(List<int> bytes) {
     try {

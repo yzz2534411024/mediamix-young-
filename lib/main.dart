@@ -16,6 +16,8 @@ import 'core/network/proxy_config_service.dart';
 import 'core/services/device_capability_service.dart';
 import 'core/services/local_proxy_server.dart';
 import 'core/widgets/privacy_consent_dialog.dart';
+import 'features/video/services/spider/java_bridge_manager.dart';
+import 'features/video/services/spider/spider_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -64,6 +66,37 @@ Future<void> _initCriticalServices() async {
     await DeviceCapabilityService.instance.getCapabilityReport();
   } catch (e) {
     debugPrint('代理/设备检测初始化失败: $e');
+  }
+
+  // Java Bridge 蜘蛛引擎初始化
+  try {
+    final bridgeManager = JavaBridgeManager.instance;
+    // 尝试从内置 TVBox 源获取蜘蛛 JAR 并启动 Bridge
+    for (final site in CmsApiSite.defaultSites) {
+      if (site.isTvBox) {
+        final spiderService = SpiderService();
+        try {
+          final config = await spiderService
+              .fetchTvBoxConfig(site.apiUrl)
+              .timeout(const Duration(seconds: 15));
+          final started = await bridgeManager.initialize(
+            spiderJarUrl: config.spiderUrl,
+          );
+          if (started) {
+            debugPrint('Java Bridge 已启动 (通过 ${site.name})');
+          } else {
+            debugPrint('Java Bridge 启动失败，csp_* 蜘蛛将不可用');
+          }
+        } catch (e) {
+          debugPrint('Java Bridge 初始化异常: $e');
+        } finally {
+          spiderService.close();
+        }
+        break; // 只尝试第一个 TVBox 源
+      }
+    }
+  } catch (e) {
+    debugPrint('Java Bridge 初始化失败: $e');
   }
 }
 

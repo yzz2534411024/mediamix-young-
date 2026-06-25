@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// TVBox 配置站点模型
 class TvBoxSite {
   final String key;
@@ -149,23 +151,37 @@ class TvBoxConfigParser {
     return raw.whereType<String>().toList();
   }
 
-  /// 安全提取字符串
+  /// 安全提取字符串，支持 Map/List 序列化为 JSON。
+  ///
+  /// 饭太硬等 TVBox 配置中约 15+ 个站点的 ext 字段是 JSON 对象
+  /// （如 `{"Cloud-drive":"tvfan/Cloud-drive.txt"}`），
+  /// 因此对 Map/List 类型使用 jsonEncode 序列化为 JSON 字符串，
+  /// 保证 ext 数据不丢失。
+  /// 对于 int/bool 等其他类型，调用 toString() 转为字符串。
   String? _stringValue(dynamic raw) {
     if (raw == null) return null;
     if (raw is String) {
       final trimmed = raw.trim();
       return trimmed.isEmpty ? null : trimmed;
     }
-    return null;
+    if (raw is Map || raw is List) {
+      return jsonEncode(raw);
+    }
+    return raw.toString();
   }
 
-  /// 安全提取 int，支持 int 或 string
+  /// 安全提取 int，支持 int 或 string。
+  ///
+  /// 部分 TVBox 配置源中 searchable/quickSearch/changeable 等字段
+  /// 可能以字符串 "true"/"false" 传入，此处统一转为 1/0 处理。
   int? _intValue(dynamic raw) {
     if (raw == null) return null;
     if (raw is int) return raw;
     if (raw is String) {
       final trimmed = raw.trim();
       if (trimmed.isEmpty) return null;
+      if (trimmed == 'true') return 1;
+      if (trimmed == 'false') return 0;
       return int.tryParse(trimmed);
     }
     return null;

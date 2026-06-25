@@ -74,7 +74,10 @@ class _VideoHomePageState extends ConsumerState<VideoHomePage> {
   Widget build(BuildContext context) {
     final sites = ref.watch(cmsSiteListProvider);
     final currentSite = ref.watch(currentSiteProvider);
-    final categoriesAsync = ref.watch(categoryListProvider);
+    final isTvBox = ref.watch(isTvBoxSourceProvider);
+    final categoriesAsync = isTvBox
+        ? ref.watch(spiderCategoriesProvider)
+        : ref.watch(categoryListProvider);
     final selectedCategory = ref.watch(selectedCategoryProvider);
     final listAsync = ref.watch(videoListProvider);
 
@@ -149,7 +152,13 @@ class _VideoHomePageState extends ConsumerState<VideoHomePage> {
                 );
               },
               loading: () => const SizedBox.shrink(),
-              error: (_, __) => const SizedBox.shrink(),
+              error: (e, _) {
+                // 蜘蛛引擎特殊错误处理
+                if (e is SpiderEngineException) {
+                  return _buildSpiderErrorContent(e.message);
+                }
+                return const SizedBox.shrink();
+              },
             ),
           ),
           const Divider(height: 1),
@@ -157,27 +166,33 @@ class _VideoHomePageState extends ConsumerState<VideoHomePage> {
           Expanded(
             child: listAsync.when(
               loading: () => _buildSkeletonContent(),
-              error: (e, _) => Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.error_outline, size: 48, color: Colors.grey[400]),
-                      const SizedBox(height: 12),
-                      Text('加载失败', style: TextStyle(color: Colors.grey[600], fontSize: 16)),
-                      const SizedBox(height: 8),
-                      Text('$e', style: TextStyle(color: Colors.grey[500], fontSize: 12),
-                        textAlign: TextAlign.center, maxLines: 3, overflow: TextOverflow.ellipsis),
-                      const SizedBox(height: 16),
-                      FilledButton.tonal(
-                        onPressed: () => ref.read(videoListProvider.notifier).refresh(),
-                        child: const Text('重试'),
-                      ),
-                    ],
+              error: (e, _) {
+                // 蜘蛛引擎特殊错误处理
+                if (e is SpiderEngineException) {
+                  return _buildSpiderErrorContent(e.message);
+                }
+                return Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.error_outline, size: 48, color: Colors.grey[400]),
+                        const SizedBox(height: 12),
+                        Text('加载失败', style: TextStyle(color: Colors.grey[600], fontSize: 16)),
+                        const SizedBox(height: 8),
+                        Text('$e', style: TextStyle(color: Colors.grey[500], fontSize: 12),
+                          textAlign: TextAlign.center, maxLines: 3, overflow: TextOverflow.ellipsis),
+                        const SizedBox(height: 16),
+                        FilledButton.tonal(
+                          onPressed: () => ref.read(videoListProvider.notifier).refresh(),
+                          child: const Text('重试'),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ),
+                );
+              },
               data: (listState) {
                 if (listState.items.isEmpty) {
                   return Center(
@@ -297,6 +312,32 @@ class _VideoHomePageState extends ConsumerState<VideoHomePage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 蜘蛛引擎错误提示（如 Java Bridge 不可用）
+  Widget _buildSpiderErrorContent(String message) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.extension_outlined, size: 48, color: Colors.orange[400]),
+            const SizedBox(height: 12),
+            Text(
+              message,
+              style: TextStyle(color: Colors.grey[700], fontSize: 14),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            FilledButton.tonal(
+              onPressed: () => ref.read(videoListProvider.notifier).refresh(),
+              child: const Text('重试'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

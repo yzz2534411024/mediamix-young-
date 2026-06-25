@@ -1,3 +1,12 @@
+/// 蜘蛛引擎异常（如 Java Bridge 不可用）
+class SpiderEngineException implements Exception {
+  final String message;
+  const SpiderEngineException(this.message);
+
+  @override
+  String toString() => message;
+}
+
 /// CMS API 站点
 class CmsApiSite {
   final String key;
@@ -5,6 +14,7 @@ class CmsApiSite {
   final String apiUrl;
   final bool enabled;
   final bool isBuiltIn;
+  final bool isTvBox;
 
   const CmsApiSite({
     required this.key,
@@ -12,6 +22,7 @@ class CmsApiSite {
     required this.apiUrl,
     this.enabled = true,
     this.isBuiltIn = false,
+    this.isTvBox = false,
   });
 
   CmsApiSite copyWith({
@@ -20,6 +31,7 @@ class CmsApiSite {
     String? apiUrl,
     bool? enabled,
     bool? isBuiltIn,
+    bool? isTvBox,
   }) {
     return CmsApiSite(
       key: key ?? this.key,
@@ -27,6 +39,7 @@ class CmsApiSite {
       apiUrl: apiUrl ?? this.apiUrl,
       enabled: enabled ?? this.enabled,
       isBuiltIn: isBuiltIn ?? this.isBuiltIn,
+      isTvBox: isTvBox ?? this.isTvBox,
     );
   }
 
@@ -37,6 +50,7 @@ class CmsApiSite {
       name: '饭太硬',
       apiUrl: 'http://www.xn--sss604efuw.net/tv',
       isBuiltIn: true,
+      isTvBox: true,
     ),
     CmsApiSite(
       key: 'bfzy',

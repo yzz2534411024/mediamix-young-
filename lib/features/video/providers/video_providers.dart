@@ -4,6 +4,7 @@ import 'package:drift/drift.dart' show Value;
 import '../models/video_models.dart';
 import '../services/tbox_api_service.dart';
 import '../services/spider/spider_service.dart';
+import '../services/spider/java_bridge_manager.dart';
 import '../services/spider/tvbox_config_parser.dart';
 import '../../../core/database/database.dart' hide VideoSource;
 import '../../../core/database/database_provider.dart';
@@ -31,6 +32,43 @@ final spiderServiceProvider = Provider<SpiderService>((ref) {
 final tvboxConfigProvider = FutureProvider.family<TvBoxConfig, String>((ref, configUrl) async {
   final service = ref.read(spiderServiceProvider);
   return service.fetchTvBoxConfig(configUrl);
+});
+
+// ===== TVBox 源检测与蜘蛛分类 =====
+
+/// 检测当前站点是否为 TVBox 配置源
+final isTvBoxSourceProvider = Provider<bool>((ref) {
+  final site = ref.watch(currentSiteProvider);
+  if (site == null) return false;
+  return site.isTvBox;
+});
+
+/// 蜘蛛分类列表（TVBox 子站点映射为分类）
+final spiderCategoriesProvider = FutureProvider<List<VideoCategory>>((ref) async {
+  final site = ref.watch(currentSiteProvider);
+  if (site == null || !site.isTvBox) return [];
+
+  final config = ref.watch(tvboxConfigProvider(site.apiUrl));
+  return config.when(
+    data: (tvboxConfig) {
+      return tvboxConfig.sites.asMap().entries.map((entry) {
+        final tvboxSite = entry.value;
+        return VideoCategory(
+          typeId: entry.key + 1,
+          typeName: tvboxSite.name,
+          typePid: 0,
+        );
+      }).toList();
+    },
+    loading: () => <VideoCategory>[],
+    error: (_, __) => <VideoCategory>[],
+  );
+});
+
+/// Java Bridge 是否可用
+final javaBridgeAvailableProvider = Provider<bool>((ref) {
+  return JavaBridgeManager.instance.isRunning &&
+      JavaBridgeManager.instance.client != null;
 });
 
 // ===== 站点列表 Provider =====
@@ -186,6 +224,17 @@ class VideoListNotifier extends AsyncNotifier<VideoListState> {
     final category = ref.watch(selectedCategoryProvider);
     if (site == null) return const VideoListState();
 
+    // TVBox 源走蜘蛛引擎
+    if (site.isTvBox) {
+      return _loadSpiderContent(site, category);
+    }
+
+    // 标准 CMS 路径
+    return _loadCmsContent(site, category);
+  }
+
+  /// CMS 标准加载（原有逻辑）
+  Future<VideoListState> _loadCmsContent(CmsApiSite site, VideoCategory? category) async {
     final api = ref.read(videoApiServiceProvider);
 
     // 首次加载合并两页数据，增加首页推荐数量
@@ -214,17 +263,89 @@ class VideoListNotifier extends AsyncNotifier<VideoListState> {
     );
   }
 
-  /// 加载下一页（追加模式）
+  /// 蜘蛛引擎加载（TVBox 源）
+  Future<VideoListState> _loadSpiderContent(CmsApiSite site, VideoCategory? category) async {
+    final spiderService = ref.read(spiderServiceProvider);
+
+    // 获取 TVBox 配置
+    final config = await spiderService.fetchTvBoxConfig(site.apiUrl);
+
+    // 初始化蜘蛛（会自动启动 Java Bridge）
+    final spiders = await spiderService.initFromConfig(config);
+    if (spiders.isEmpty) {
+      // 检查 Java Bridge 是否可用
+      if (!JavaBridgeManager.instance.isRunning) {
+        throw const SpiderEngineException(
+          '该源需要 Java 环境支持，请在设置中配置 Java 运行时',
+        );
+      }
+      return const VideoListState();
+    }
+
+    if (category != null) {
+      // 选中了特定分类（子站点），加载该蜘蛛的内容
+      final siteIndex = category.typeId - 1;
+      if (siteIndex >= 0 && siteIndex < config.sites.length) {
+        final tvboxSite = config.sites[siteIndex];
+        final spider = spiderService.getSpider(tvboxSite.key);
+        if (spider != null) {
+          final result = await spider.homeContent(page: 1);
+          return VideoListState(
+            items: result.recommend,
+            currentPage: 1,
+            totalPages: 1,
+            hasMore: false,
+          );
+        }
+      }
+      return const VideoListState();
+    }
+
+    // 未选分类：加载所有蜘蛛的首页推荐
+    final allItems = <VideoItem>[];
+    final seenIds = <String>{};
+    for (final spider in spiders) {
+      try {
+        final result = await spider.homeContent(page: 1);
+        for (final item in result.recommend) {
+          if (!seenIds.contains(item.vodId)) {
+            seenIds.add(item.vodId);
+            allItems.add(item);
+          }
+        }
+      } catch (e) {
+        _logger.w('蜘蛛 ${spider.key} 首页加载失败: $e');
+      }
+    }
+
+    if (allItems.isEmpty && !JavaBridgeManager.instance.isRunning) {
+      throw const SpiderEngineException(
+        '该源需要 Java 环境支持，请在设置中配置 Java 运行时',
+      );
+    }
+
+    return VideoListState(
+      items: allItems,
+      currentPage: 1,
+      totalPages: 1,
+      hasMore: false,
+    );
+  }
+
+  /// 加载下一页（追加模式，仅 CMS 源支持）
   Future<void> loadMore() async {
     final current = state.valueOrNull;
     if (current == null || current.isLoadingMore || !current.hasMore) return;
 
+    // 蜘蛛源不支持分页
+    final site = ref.read(currentSiteProvider);
+    if (site == null) return;
+    if (site.isTvBox) return;
+
     // 标记加载中
     state = AsyncData(current.copyWith(isLoadingMore: true));
 
-    final site = ref.read(currentSiteProvider);
     final category = ref.read(selectedCategoryProvider);
-    if (site == null) return;
 
     final api = ref.read(videoApiServiceProvider);
     final nextPage = current.currentPage + 1;
@@ -257,6 +378,19 @@ class VideoListNotifier extends AsyncNotifier<VideoListState> {
       state = const AsyncData(VideoListState());
       return;
     }
+
+    // TVBox 源走蜘蛛引擎
+    if (site.isTvBox) {
+      try {
+        final result = await _loadSpiderContent(site, category);
+        state = AsyncData(result);
+      } catch (e) {
+        state = AsyncError(e, StackTrace.current);
+      }
+      return;
+    }
+
+    // 标准 CMS 路径
     final api = ref.read(videoApiServiceProvider);
     try {
       // 刷新时也合并两页数据，增加首页推荐数量
