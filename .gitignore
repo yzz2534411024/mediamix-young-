@@ -86,3 +86,8 @@ gh.exe
 *.lock
 !pubspec.lock
 .git-retry.sh
+
+# Debug artifacts
+*.py
+*.bin
+*.log
