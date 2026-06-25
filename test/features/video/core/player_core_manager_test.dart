@@ -226,8 +226,8 @@ void main() {
       expect(manager.isBuffering, false);
     });
 
-    test('isLoading 默认为 true', () {
-      expect(manager.isLoading, true);
+    test('isLoading 默认为 false', () {
+      expect(manager.isLoading, false);
     });
 
     test('loadingText 默认为 "加载中..."', () {

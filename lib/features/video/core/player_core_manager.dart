@@ -115,6 +115,9 @@ class PlayerCoreManager extends ChangeNotifier {
   String _title = '', _url = '';
   List<String>? _episodeNames, _episodeUrls, _subtitleUrls;
 
+  // 初始化标志 — 减少初始化期间 notifyListeners 频率
+  bool _isInitializing = false;
+
   // 字幕
   final SubtitleService _subtitleService = SubtitleService();
   List<SubtitleTrack> _subtitleTracks = [];
@@ -149,7 +152,7 @@ class PlayerCoreManager extends ChangeNotifier {
   bool _isInBackground = false, _isInPipMode = false;
   int? _pipSavedQualityIndex;
   PowerMode _powerMode = PowerMode.balanced;
-  bool _isLoading = true;
+  bool _isLoading = false;
   String _loadingText = '加载中...';
   double _bufferPercent = 0.0;
   String _networkSpeedText = '';
@@ -233,12 +236,16 @@ class PlayerCoreManager extends ChangeNotifier {
     List<String>? qualityLabels, List<String>? qualityUrls,
     List<String>? subtitleUrls, AppDatabase? db,
   }) async {
+    _isInitializing = true;
     _url = url; _title = title; _episodeNames = episodeNames;
     _episodeUrls = episodeUrls; _subtitleUrls = subtitleUrls; _db = db;
     _hasTriedDirectUrl = false;
 
-    // 设备探测 — await 确保完成后再继续
-    await _configureHardwareDecoding();
+    // 设备探测 — 非阻塞，使用默认值先行继续
+    unawaited(_configureHardwareDecoding().then((_) {
+      if (_isDisposed) return;
+      _logger.d('设备探测完成: hwDecode=$_hardwareDecodingEnabled');
+    }));
 
     // 4. 设置回调
     _bufferManager.onBufferStateChanged = _onBufferStateChanged;
@@ -291,7 +298,7 @@ class PlayerCoreManager extends ChangeNotifier {
       _abrController.updateBuffer(buf);
       if (_isLoading && buf > Duration.zero) _isLoading = false;
       _bufferPercent = _bufferManager.bufferPercent;
-      notifyListeners();
+      _notifyIfNotInitializing();
     });
 
     _playingSubscription = _player.stream.playing.listen((playing) {
@@ -299,7 +306,7 @@ class PlayerCoreManager extends ChangeNotifier {
         _metricsEngine.setBuffering(false);
         _metricsEngine.recordEvent(MetricsEvent.bufferingEnd);
         _isLoading = false;
-        notifyListeners();
+        _notifyIfNotInitializing();
       }
     });
 
@@ -314,7 +321,7 @@ class PlayerCoreManager extends ChangeNotifier {
       _networkConditionSubscription = NetworkEngine.instance.onConditionChanged.listen((c) {
         _bufferManager.updateNetworkCondition(c);
         _networkSpeedText = _formatNetworkSpeed(NetworkEngine.instance.currentBandwidthKbps);
-        notifyListeners();
+        _notifyIfNotInitializing();
       });
       _bufferManager.updateNetworkCondition(NetworkEngine.instance.currentCondition);
     } catch (e) {
@@ -344,6 +351,8 @@ class PlayerCoreManager extends ChangeNotifier {
     _detectPowerMode();
 
     _isInitialized = true;
+    _isInitializing = false;
+    notifyListeners();
   }
 
   @override
@@ -546,6 +555,14 @@ class PlayerCoreManager extends ChangeNotifier {
 
   void _onPreloadNextEpisode(String videoId, String url) { _logger.i('预加载下一集: videoId=$videoId'); onNotifyPreloadBuffering?.call(false); }
   void _onPreloadAdjacent(List<int> indices, String title, List<String> urls) { _logger.d('预加载相邻集: indices=$indices'); }
+
+  // ========================================================================
+  // 初始化期间通知控制
+  // ========================================================================
+
+  void _notifyIfNotInitializing() {
+    if (!_isInitializing) notifyListeners();
+  }
 
   // ========================================================================
   // 硬解码配置

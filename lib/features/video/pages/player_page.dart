@@ -863,78 +863,84 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: ListenableBuilder(
-        listenable: _manager,
-        builder: (context, _) {
-          return Stack(
-            children: [
-              // 视频画面
-              Center(
-                child: Video(
-                  controller: _manager.controller,
-                  width: videoWidth,
-                  height: videoHeight,
-                  fit: _getBoxFit(),
-                ),
+      body: Stack(
+        children: [
+          // 底层：Video 组件（永不因 loading 状态重建）
+          Positioned.fill(
+            child: Center(
+              child: Video(
+                controller: _manager.controller,
+                width: videoWidth,
+                height: videoHeight,
+                fit: _getBoxFit(),
               ),
+            ),
+          ),
 
-              // 手势层
-              Positioned.fill(
-                child: GestureDetector(
-                  onTap: _onSingleTap,
-                  onDoubleTapDown: _onDoubleTapDown,
-                  onPanStart: _onPanStart,
-                  onPanUpdate: _onPanUpdate,
-                  onPanEnd: _onPanEnd,
-                  behavior: HitTestBehavior.opaque,
-                  child: Container(color: Colors.transparent),
-                ),
-              ),
+          // 手势层
+          Positioned.fill(
+            child: GestureDetector(
+              onTap: _onSingleTap,
+              onDoubleTapDown: _onDoubleTapDown,
+              onPanStart: _onPanStart,
+              onPanUpdate: _onPanUpdate,
+              onPanEnd: _onPanEnd,
+              behavior: HitTestBehavior.opaque,
+              child: Container(color: Colors.transparent),
+            ),
+          ),
 
-              // 字幕叠加层
-              if (_manager.showSubtitles && _manager.subtitleTracks.isNotEmpty)
-                SubtitleOverlay(
-                  text: null,
-                  tracks: _manager.subtitleTracks,
-                  currentTrackIndex: _manager.currentSubtitleTrack,
-                  position: _manager.lastVideoPosition,
-                  subtitleService: _manager.subtitleService,
-                ),
+          // 上层：受 ListenableBuilder 控制的 UI 覆盖层
+          ListenableBuilder(
+            listenable: _manager,
+            builder: (context, _) {
+              return Stack(
+                children: [
+                  // 字幕叠加层
+                  if (_manager.showSubtitles && _manager.subtitleTracks.isNotEmpty)
+                    SubtitleOverlay(
+                      text: null,
+                      tracks: _manager.subtitleTracks,
+                      currentTrackIndex: _manager.currentSubtitleTrack,
+                      position: _manager.lastVideoPosition,
+                      subtitleService: _manager.subtitleService,
+                    ),
 
-              // 加载/缓冲覆盖层
-              if (_manager.isLoading)
-                _buildLoadingOverlay(),
+                  // Seek进度覆盖层
+                  if (_manager.isSeeking)
+                    _buildSeekingOverlay(),
 
-              // Seek进度覆盖层
-              if (_manager.isSeeking)
-                _buildSeekingOverlay(),
+                  // 倍速指示器覆盖层
+                  if (_manager.playbackSpeed != 1.0 && _speedIndicatorTimer?.isActive == true)
+                    _buildSpeedIndicator(),
 
-              // 倍速指示器覆盖层
-              if (_manager.playbackSpeed != 1.0 && _speedIndicatorTimer?.isActive == true)
-                _buildSpeedIndicator(),
+                  // 锁屏状态下只显示中央小锁图标
+                  if (_isLocked)
+                    _buildLockIcon(),
 
-              // 锁屏状态下只显示中央小锁图标
-              if (_isLocked)
-                _buildLockIcon(),
+                  // 控制层（非锁屏状态下显示）
+                  if (_showControls && !_isLocked)
+                    _buildControlsLayer(),
 
-              // 控制层（非锁屏状态下显示）
-              if (_showControls && !_isLocked)
-                _buildControlsLayer(),
+                  // 亮度指示器
+                  if (_showBrightnessIndicator)
+                    _buildBrightnessIndicator(),
 
-              // 亮度指示器
-              if (_showBrightnessIndicator)
-                _buildBrightnessIndicator(),
+                  // 音量指示器
+                  if (_showVolumeIndicator)
+                    _buildVolumeIndicator(),
 
-              // 音量指示器
-              if (_showVolumeIndicator)
-                _buildVolumeIndicator(),
+                  // 滑动进度预览指示器
+                  if (_showProgressIndicator)
+                    _buildProgressIndicator(),
+                ],
+              );
+            },
+          ),
 
-              // 滑动进度预览指示器
-              if (_showProgressIndicator)
-                _buildProgressIndicator(),
-            ],
-          );
-        },
+          // 上层：独立的 loading overlay（AnimatedOpacity 平滑过渡）
+          _buildIndependentLoadingOverlay(),
+        ],
       ),
     );
   }
@@ -943,7 +949,25 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
   // Widget 构建器
   // ========================================================================
 
-  Widget _buildLoadingOverlay() {
+  Widget _buildIndependentLoadingOverlay() {
+    return ListenableBuilder(
+      listenable: _manager,
+      builder: (context, _) {
+        final isLoading = _manager.isLoading;
+        return IgnorePointer(
+          ignoring: !isLoading,
+          child: AnimatedOpacity(
+            opacity: isLoading ? 1.0 : 0.0,
+            duration: const Duration(milliseconds: 200),
+            onEnd: () {},
+            child: isLoading ? _buildLoadingContent() : const SizedBox.shrink(),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLoadingContent() {
     return Center(
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
