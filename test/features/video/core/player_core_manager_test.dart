@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mediamix/core/services/power_manager_service.dart';
 import 'package:mediamix/features/video/core/player_core_manager.dart';
+import 'package:mediamix/features/video/services/subtitle_service.dart';
 
 void main() {
   // ===========================================================================
@@ -455,7 +456,10 @@ void main() {
       manager.onSubtitlesLoaded = (tracks) {
         captured = tracks;
       };
-      manager.onSubtitlesLoaded!(['track1', 'track2']);
+      manager.onSubtitlesLoaded!([
+        const SubtitleTrack(label: 'track1', language: 'zh-CN', entries: []),
+        const SubtitleTrack(label: 'track2', language: 'zh-CN', entries: []),
+      ]);
       expect(captured, isNotNull);
       expect(captured!.length, 2);
     });

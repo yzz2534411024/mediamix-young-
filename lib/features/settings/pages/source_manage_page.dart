@@ -146,18 +146,20 @@ class _SourceManagePageState extends ConsumerState<SourceManagePage> {
                 }
                 setDialogState(() => isValidating = true);
                 // 先验证
+                final messenger = ScaffoldMessenger.of(context);
                 final site = CmsApiSite(
                   key: 'custom_${const Uuid().v4().substring(0, 8)}',
                   name: name,
                   apiUrl: url,
                 );
                 final status = await ref.read(sourceActionsProvider).checkSource(site);
+                if (!mounted) return;
                 setDialogState(() => isValidating = false);
                 if (status.isAvailable) {
                   ref.read(sourceActionsProvider).addSource(site);
                   if (mounted) {
-                    Navigator.pop(ctx);
-                    ScaffoldMessenger.of(context).showSnackBar(
+                    Navigator.pop(context);
+                    messenger.showSnackBar(
                       SnackBar(content: Text('添加成功！延迟 ${status.latencyMs}ms'), behavior: SnackBarBehavior.floating),
                     );
                   }
@@ -177,7 +179,7 @@ class _SourceManagePageState extends ConsumerState<SourceManagePage> {
                     );
                     if (shouldAdd == true) {
                       ref.read(sourceActionsProvider).addSource(site);
-                      Navigator.pop(ctx);
+                      if (mounted) Navigator.pop(context);
                     }
                   }
                 }

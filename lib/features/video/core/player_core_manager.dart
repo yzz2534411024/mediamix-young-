@@ -20,12 +20,15 @@ import 'engines/cache_engine_impl.dart';
 import 'engines/playback_error_handler_impl.dart';
 import 'engines/metrics_engine_impl.dart';
 
+const _kFirstFrameTimeout = Duration(seconds: 10);
+const _kPreloadTriggerPosition = 0.8;
+
 enum PlayMode { sequential, loopSingle, loopAll }
 enum AspectMode { original, ratio16_9, ratio4_3, fill, cover }
 
 class FirstFrameEvent {
   final int firstFrameTimeMs;
-  FirstFrameEvent(this.firstFrameTimeMs);
+  const FirstFrameEvent(this.firstFrameTimeMs);
 }
 
 class ErrorEvent {
@@ -44,7 +47,7 @@ class QualitySuggestionEvent {
 }
 
 class ProgressResumeEvent { final Duration position; ProgressResumeEvent(this.position); }
-class QualityAutoSwitchEvent { final String label; QualityAutoSwitchEvent(this.label); }
+class QualityAutoSwitchEvent { final String label; const QualityAutoSwitchEvent(this.label); }
 
 /// 播放器核心管理器 — 缓存/错误/指标委托给引擎
 class PlayerCoreManager extends ChangeNotifier {
@@ -132,7 +135,9 @@ class PlayerCoreManager extends ChangeNotifier {
   Duration _lastVideoPosition = Duration.zero;
   DateTime _lastPositionUpdateTime = DateTime.now();
   Timer? _avSyncCheckTimer;
+  // ignore: unused_field
   int _avSyncCorrectionCount = 0;
+  // ignore: unused_field
   DateTime? _lastAVSyncCorrection;
 
   // 流订阅
@@ -321,7 +326,7 @@ class PlayerCoreManager extends ChangeNotifier {
     _avSyncCheckTimer = Timer.periodic(const Duration(seconds: 2), (_) => _checkAVSync());
 
     // 首帧超时兜底：10秒后仍无首帧，绕过本地代理直连 CDN
-    _firstFrameTimeout = Timer(const Duration(seconds: 10), () {
+    _firstFrameTimeout = Timer(_kFirstFrameTimeout, () {
       if (_isDisposed) return;
       if (!_metricsEngine.hasRecordedFirstFrame && _url.isNotEmpty && !_hasTriedDirectUrl) {
         _hasTriedDirectUrl = true;
@@ -487,7 +492,9 @@ class PlayerCoreManager extends ChangeNotifier {
       if (_db == null) return null;
       final p = await _db!.getPlaybackProgress(_url);
       if (p != null && p.position > 5000) return Duration(milliseconds: p.position);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('播放进度查询失败: $e');
+    }
     return null;
   }
 
@@ -643,7 +650,7 @@ class PlayerCoreManager extends ChangeNotifier {
     if (_isDisposed || _hasTriggeredNextEpisodePreload || !hasNextEpisode) return;
     final dur = _player.state.duration;
     if (dur.inMilliseconds <= 0) return;
-    if (position.inMilliseconds / dur.inMilliseconds >= 0.8) {
+    if (position.inMilliseconds / dur.inMilliseconds >= _kPreloadTriggerPosition) {
       _hasTriggeredNextEpisodePreload = true;
       final next = _currentEpisodeIndex + 1;
       _cacheEngine.preloadNextEpisode('${_title}_$next', _episodeUrls![next]);
@@ -707,9 +714,9 @@ class PlayerCoreManager extends ChangeNotifier {
     } on PlatformException catch (e) {
       _powerMode = PowerMode.balanced;
       _logger.d('获取电池信息失败: ${e.message}');
-    } catch (_) {
+    } catch (e) {
       _powerMode = PowerMode.balanced;
-      _logger.d('无法获取电池信息');
+      debugPrint('电池信息获取失败: $e');
     }
   }
 
@@ -836,7 +843,9 @@ class PlayerCoreManager extends ChangeNotifier {
         videoUrl: url, position: _player.state.position.inMilliseconds,
         duration: _player.state.duration.inMilliseconds, lastPlayTime: DateTime.now().millisecondsSinceEpoch,
       ));
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('进度保存失败: $e');
+    }
   }
 
   Future<void> _saveSkipInterval() async { final p = await SharedPreferences.getInstance(); await p.setInt('skip_interval', _skipInterval); }
@@ -845,7 +854,9 @@ class PlayerCoreManager extends ChangeNotifier {
       final p = await SharedPreferences.getInstance();
       final s = p.getInt('skip_interval');
       if (s != null && _skipIntervals.contains(s)) { _skipInterval = s; if (!_isDisposed) notifyListeners(); }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('偏好加载失败: $e');
+    }
   }
 
   String _formatNetworkSpeed(double kbps) => kbps <= 0 ? '' : kbps < 1000 ? '${kbps.toStringAsFixed(0)} kb/s' : '${(kbps / 1000).toStringAsFixed(1)} MB/s';

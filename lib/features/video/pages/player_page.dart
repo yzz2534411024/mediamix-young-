@@ -11,6 +11,9 @@ import '../models/video_models.dart' show VideoParser;
 import '../core/player_core_manager.dart';
 import '../services/subtitle_service.dart';
 
+const _kHideControlsDelay = Duration(seconds: 5);
+const _kSpeedIndicatorDuration = Duration(seconds: 3);
+
 class PlayerPage extends ConsumerStatefulWidget {
   final String url;
   final String title;
@@ -197,7 +200,9 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     try {
       final preloadService = ref.read(preloadServiceProvider);
       preloadService.notifyPlaybackBuffering(isBuffering);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('预加载服务通知失败: $e');
+    }
   }
 
   // ========================================================================
@@ -295,7 +300,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
 
   void _startHideTimer() {
     _hideTimer?.cancel();
-    _hideTimer = Timer(const Duration(seconds: 5), () {
+    _hideTimer = Timer(_kHideControlsDelay, () {
       if (mounted && !_isLocked) {
         setState(() => _showControls = false);
       }
@@ -327,10 +332,10 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
     final dx = details.globalPosition.dx;
     if (dx < width * 0.3) {
       final pos = _manager.player.state.position;
-      _manager.fastSeek(pos - const Duration(seconds: 10));
+      _manager.fastSeek(pos - Duration(seconds: _manager.skipInterval));
     } else if (dx > width * 0.7) {
       final pos = _manager.player.state.position;
-      _manager.fastSeek(pos + const Duration(seconds: 10));
+      _manager.fastSeek(pos + Duration(seconds: _manager.skipInterval));
     } else {
       _manager.togglePlayPause();
     }
@@ -537,7 +542,7 @@ class _PlayerPageState extends ConsumerState<PlayerPage> with WidgetsBindingObse
               _showControlsAndResetTimer();
               // 倍速指示器
               _speedIndicatorTimer?.cancel();
-              _speedIndicatorTimer = Timer(const Duration(seconds: 3), () {
+              _speedIndicatorTimer = Timer(_kSpeedIndicatorDuration, () {
                 if (mounted) setState(() {});
               });
             },

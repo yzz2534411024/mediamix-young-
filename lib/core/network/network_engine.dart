@@ -869,8 +869,6 @@ class _BandwidthInterceptor extends Interceptor {
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    // 记录下载样本
-    final duration = response.requestOptions.receiveTimeout;
     // 使用响应头中的耗时信息或估算
     final int responseTime = _extractResponseTime(response);
     if (responseTime > 0) {

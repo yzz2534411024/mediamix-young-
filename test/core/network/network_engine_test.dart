@@ -126,7 +126,8 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 50));
 
         // lte → wifi
-        estimator.addSample(700000, 1000); // 5600 kbps
+        // EWMA(α=0.7) 平滑后需 ≥5000 才触发 wifi，7200kbps 足够
+        estimator.addSample(900000, 1000); // 7200 kbps → EWMA ≈ 5432 → wifi
         await Future<void>.delayed(const Duration(milliseconds: 50));
 
         expect(conditions, equals([

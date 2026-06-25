@@ -218,7 +218,6 @@ void main() {
 }
 
 class _FakeSpider implements SpiderAdapter {
-  @override
   final TvBoxSite site;
 
   _FakeSpider({required this.site});

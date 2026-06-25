@@ -961,6 +961,7 @@ class VideoCacheService {
   }
 
   /// 计算当前缓存总大小
+  // ignore: unused_element
   int _calculateTotalCacheSize() => _cachedDiskTotalSize;
 
   void _addToDiskTotal(int size) => _cachedDiskTotalSize += size;

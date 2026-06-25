@@ -294,6 +294,7 @@ void main() {
     setUp(() async {
       SharedPreferences.setMockInitialValues({});
       service = DeviceCapabilityService.instance;
+      service.resetForTesting();
     });
 
     // hasDetected 测试放在最前面，避免 _cachedReport 缓存影响

@@ -46,6 +46,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           final epUrlsStr = state.uri.queryParameters['epUrls'];
           final qualityLabelsStr = state.uri.queryParameters['qualityLabels'];
           final qualityUrlsStr = state.uri.queryParameters['qualityUrls'];
+          final subtitleUrlsStr = state.uri.queryParameters['subtitleUrls'];
 
           final episodeIndex = indexStr != null ? int.tryParse(indexStr) : null;
           final episodeNames = epNamesStr?.split(',');
@@ -56,16 +57,18 @@ final routerProvider = Provider<GoRouter>((ref) {
           final qualityUrls = qualityUrlsStr?.isNotEmpty == true
               ? qualityUrlsStr!.split(',')
               : null;
+          final subtitleUrls = subtitleUrlsStr?.isNotEmpty == true
+              ? subtitleUrlsStr!.split(',')
+              : null;
 
+          // 无过渡动画，直接显示播放页，消除卡顿
           return CustomTransitionPage(
             key: state.pageKey,
             opaque: true,
             barrierColor: Colors.black,
-            transitionDuration: const Duration(milliseconds: 250),
-            reverseTransitionDuration: const Duration(milliseconds: 250),
-            transitionsBuilder: (_, animation, __, child) {
-              return FadeTransition(opacity: animation, child: child);
-            },
+            transitionDuration: Duration.zero,
+            reverseTransitionDuration: Duration.zero,
+            transitionsBuilder: (_, animation, __, child) => child,
             child: PlayerPage(
               url: url,
               title: title,
@@ -74,6 +77,7 @@ final routerProvider = Provider<GoRouter>((ref) {
               episodeUrls: episodeUrls,
               qualityLabels: qualityLabels,
               qualityUrls: qualityUrls,
+              subtitleUrls: subtitleUrls,
             ),
           );
         },

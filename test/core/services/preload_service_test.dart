@@ -578,9 +578,9 @@ void main() {
 
       test('dispose 关闭 tasksStream', () async {
         service.dispose();
-        // stream 关闭后不再发出事件
+        // stream 关闭后不再发出事件，isEmpty 返回 Future<bool>
         expect(
-          service.tasksStream.isEmpty,
+          await service.tasksStream.isEmpty,
           isTrue,
         );
       });

@@ -264,6 +264,11 @@ class DeviceCapabilityService {
     ];
   }
 
+  /// 重置缓存（仅用于测试）
+  void resetForTesting() {
+    _cachedReport = null;
+  }
+
   /// 查询指定编码格式+分辨率的硬件解码能力
   ///
   /// 返回最近的匹配项（分辨率≥请求值的最小分辨率），无匹配则返回 null。

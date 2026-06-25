@@ -220,6 +220,7 @@ void main() {
     setUp(() async {
       SharedPreferences.setMockInitialValues({});
       service = PowerManagerService.instance;
+      service.resetForTesting();
     });
 
     group('setPowerMode', () {

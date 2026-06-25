@@ -252,6 +252,11 @@ class PlayerMetricsService {
   /// 告警阈值配置
   AlertThresholds _alertThresholds = const AlertThresholds();
 
+  /// 本地带宽采样累计（用于独立于 NetworkEngine 的带宽估算）
+  double _localBandwidthSumKbps = 0;
+  int _localBandwidthSampleCount = 0;
+  double _localPeakBandwidthKbps = 0;
+
   /// 指标更新流控制器
   final StreamController<PlaybackMetrics> _metricsController =
       StreamController<PlaybackMetrics>.broadcast();
@@ -385,10 +390,16 @@ class PlayerMetricsService {
         break;
     }
 
-    // 处理带宽采样（来自 NetworkEngine 的全局 Dio 拦截器持续追踪）
-    if (bytesDownloaded != null && downloadDurationMs != null) {
-      _currentMetrics!.avgBandwidthKbps = NetworkEngine.instance.estimateBandwidth();
-      _currentMetrics!.peakBandwidthKbps = NetworkEngine.instance.peakBandwidthKbps;
+    // 处理带宽采样（优先使用事件携带的数据，回退到 NetworkEngine 全局估算）
+    if (bytesDownloaded != null && downloadDurationMs != null && downloadDurationMs > 0) {
+      final sampleKbps = (bytesDownloaded * 8.0) / (downloadDurationMs / 1000.0) / 1000.0;
+      _localBandwidthSumKbps += sampleKbps;
+      _localBandwidthSampleCount++;
+      if (sampleKbps > _localPeakBandwidthKbps) {
+        _localPeakBandwidthKbps = sampleKbps;
+      }
+      _currentMetrics!.avgBandwidthKbps = sampleKbps;
+      _currentMetrics!.peakBandwidthKbps = _localPeakBandwidthKbps;
     }
 
     // 记录音视频同步偏移
@@ -517,9 +528,14 @@ class PlayerMetricsService {
           seekLatencies.reduce((a, b) => a + b) ~/ seekLatencies.length;
     }
 
-    // 带宽估计 — 来自 NetworkEngine 全局采样（Dio拦截器持续追踪）
-    _currentMetrics!.avgBandwidthKbps = NetworkEngine.instance.estimateBandwidth();
-    _currentMetrics!.peakBandwidthKbps = NetworkEngine.instance.peakBandwidthKbps;
+    // 带宽估计 — 优先使用本地采样，回退到 NetworkEngine 全局采样
+    if (_localBandwidthSampleCount > 0) {
+      _currentMetrics!.avgBandwidthKbps = _localBandwidthSumKbps / _localBandwidthSampleCount;
+      _currentMetrics!.peakBandwidthKbps = _localPeakBandwidthKbps;
+    } else {
+      _currentMetrics!.avgBandwidthKbps = NetworkEngine.instance.estimateBandwidth();
+      _currentMetrics!.peakBandwidthKbps = NetworkEngine.instance.peakBandwidthKbps;
+    }
   }
 
   // ==========================================================================

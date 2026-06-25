@@ -337,6 +337,7 @@ final relatedVideosProvider = FutureProvider.family<List<VideoItem>, ({String so
 // ===== 搜索 Provider（防抖 + 多源搜索） =====
 
 /// 搜索防抖控制器
+// ignore: unused_element
 final _searchDebounceProvider = Provider<Timer?>((ref) => null);
 
 /// 搜索查询（带防抖）

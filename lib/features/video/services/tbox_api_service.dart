@@ -5,6 +5,7 @@ import 'package:dio/io.dart';
 import 'package:logger/logger.dart';
 import '../models/video_models.dart';
 import 'spider/tvbox_config_parser.dart';
+import 'spider/tvbox_image_decoder.dart';
 import '../../../core/network/proxy_config_service.dart';
 
 /// CMS API 视频服务
@@ -44,7 +45,6 @@ class VideoApiService {
       headers: {
         'User-Agent': 'okhttp/3.12.11',
         'Accept': '*/*',
-        'Accept-Encoding': 'gzip, deflate',
       },
       validateStatus: (status) => status != null && status < 500,
       followRedirects: true,
@@ -324,6 +324,7 @@ class VideoApiService {
 
   /// 根据网络类型自适应设置连接超时
   /// WiFi环境2秒，移动网络3秒
+  // ignore: unused_element
   static Duration _adaptiveConnectTimeout({bool isWifi = false}) {
     return isWifi
         ? const Duration(seconds: 2)
@@ -391,13 +392,14 @@ class VideoApiService {
 
   // ==================== 原有方法（保持签名不变） ====================
 
-  /// 获取分类列表（支持标准 CMS 和 TVBox 配置两种格式）
+  /// 获取分类列表（支持标准 CMS、TVBox 配置、图片伪装三种格式）
   Future<List<VideoCategory>> fetchCategories(String apiUrl) async {
     try {
       final url = _buildUrl(apiUrl, {'ac': 'list'});
       _logger.d('获取分类列表: $url');
-      final response = await _dio.get(url);
-      final data = _extractJson(response);
+
+      // 使用 HttpClient 直接请求，绕过 Dio
+      final data = await _fetchAndDecode(url);
 
       // TVBox 配置格式：sites 数组 → 转为 class 分类
       if (data.containsKey('sites') && data['sites'] is List) {
@@ -426,8 +428,6 @@ class VideoApiService {
         }
       }
       return categories;
-    } on DioException catch (e) {
-      throw Exception(_formatDioError(e));
     } catch (e) {
       _logger.e('获取分类列表失败: $e');
       throw Exception('获取分类失败: $e');
@@ -437,7 +437,7 @@ class VideoApiService {
   /// 缓存的 TVBox 站点列表
   List<Map<String, dynamic>>? _tvboxSites;
 
-  /// 获取影片列表（支持 TVBox 站点派生 URL）
+  /// 获取影片列表（支持 TVBox 站点派生 URL 和图片伪装格式）
   Future<VideoListResponse> fetchVideoList(String apiUrl, {int page = 1, int? typeId}) async {
     try {
       // 如果有缓存的 TVBox 站点且 typeId 有效，尝试使用该站点的 ext URL
@@ -451,20 +451,28 @@ class VideoApiService {
         }
       }
 
-      final params = {'ac': 'detail', 'pg': page.toString()};
+      final params = <String, String>{'ac': 'detail', 'pg': page.toString()};
       if (typeId != null && effectiveUrl == apiUrl) {
         params['t'] = typeId.toString();
       }
       final url = _buildUrl(effectiveUrl, params);
       _logger.d('获取影片列表: $url');
 
-      final response = await _dio.get(url);
-      final data = _extractJson(response);
+      final data = await _fetchAndDecode(url);
+
+      // 检测 TVBox 配置格式（饭太硬等配置源会返回 sites 数组而非视频列表）
+      if (data.containsKey('sites') && data['sites'] is List) {
+        _logger.d('响应是 TVBox 配置格式，缓存 sites 并返回空列表');
+        _tvboxSites = (data['sites'] as List).cast<Map<String, dynamic>>();
+        return VideoListResponse(
+          list: [],
+          page: page,
+          pageCount: 0,
+          total: 0,
+        );
+      }
+
       return VideoListResponse.fromJson(data);
-    } on DioException catch (e) {
-      final errMsg = _formatDioError(e);
-      _logger.e('获取影片列表失败: $errMsg');
-      throw Exception(errMsg);
     } catch (e) {
       _logger.e('获取影片列表失败: $e');
       throw Exception('加载失败: $e');
@@ -511,8 +519,7 @@ class VideoApiService {
       final url = _buildUrl(apiUrl, {'ac': 'detail', 'ids': vodId});
       _logger.d('获取影片详情: $url');
 
-      final response = await _dio.get(url);
-      final data = _extractJson(response);
+      final data = await _fetchAndDecode(url);
 
       final list = data['list'] as List?;
       if (list == null || list.isEmpty) {
@@ -520,10 +527,6 @@ class VideoApiService {
       }
 
       return VideoDetail.fromJson(list.first as Map<String, dynamic>, sourceKey: sourceKey);
-    } on DioException catch (e) {
-      final errMsg = _formatDioError(e);
-      _logger.e('获取影片详情失败: $errMsg');
-      throw Exception(errMsg);
     } catch (e) {
       _logger.e('获取影片详情失败: $e');
       throw Exception('加载失败: $e');
@@ -536,16 +539,105 @@ class VideoApiService {
       final url = _buildUrl(apiUrl, {'wd': keyword});
       _logger.d('搜索影片: $url');
 
-      final response = await _dio.get(url);
-      final data = _extractJson(response);
+      final data = await _fetchAndDecode(url);
+
+      // 检测 TVBox 配置格式
+      if (data.containsKey('sites') && data['sites'] is List) {
+        _logger.d('搜索响应是 TVBox 配置格式，返回空列表');
+        return VideoListResponse(list: [], page: 1, pageCount: 0, total: 0);
+      }
+
       return VideoListResponse.fromJson(data);
-    } on DioException catch (e) {
-      final errMsg = _formatDioError(e);
-      _logger.e('搜索影片失败: $errMsg');
-      throw Exception(errMsg);
     } catch (e) {
       _logger.e('搜索影片失败: $e');
       throw Exception('搜索失败: $e');
+    }
+  }
+
+  /// 使用 dart:io HttpClient 直接请求并解码响应
+  /// 绕过 Dio，彻底解决 bytes 类型判断和图片伪装格式问题
+  Future<Map<String, dynamic>> _fetchAndDecode(String url) async {
+    _logger.d('_fetchAndDecode: $url');
+    HttpClient? client;
+    try {
+      client = HttpClient();
+      client.connectionTimeout = const Duration(seconds: 10);
+      client.idleTimeout = const Duration(seconds: 5);
+      client.autoUncompress = false; // 禁止自动解压，避免 gzip 问题
+      client.badCertificateCallback = (cert, host, port) => true;
+      try {
+        ProxyConfigService.instance.configureHttpClient(client);
+      } catch (_) {}
+
+      final request = await client.getUrl(Uri.parse(url));
+      request.headers.set('User-Agent', 'okhttp/3.12.11');
+      request.headers.set('Accept', '*/*');
+      request.headers.set('Accept-Encoding', 'identity'); // 明确要求不压缩
+
+      final response = await request.close();
+      final statusCode = response.statusCode;
+      if (statusCode != 200) {
+        throw Exception('HTTP $statusCode');
+      }
+
+      final bytes = <int>[];
+      await for (final chunk in response) {
+        bytes.addAll(chunk);
+      }
+
+      _logger.d('_fetchAndDecode: 收到 ${bytes.length} bytes, '
+          '前10字节=${bytes.take(10).map((b) => b.toRadixString(16).padLeft(2, '0')).join(' ')}');
+
+      // 步骤0：如果数据是 gzip 压缩的，先解压
+      List<int> effectiveBytes = bytes;
+      if (bytes.length >= 2 && bytes[0] == 0x1F && bytes[1] == 0x8B) {
+        _logger.d('_fetchAndDecode: 检测到 gzip 压缩数据，正在解压...');
+        try {
+          effectiveBytes = gzip.decode(bytes);
+          _logger.d('_fetchAndDecode: gzip 解压后 ${effectiveBytes.length} bytes');
+        } catch (e) {
+          _logger.w('_fetchAndDecode: gzip 解压失败: $e，使用原始数据');
+        }
+      }
+
+      // 步骤1：TvBoxImageDecoder（JPEG 伪装 + UTF-8 + GBK + Base64）
+      final decoded = TvBoxImageDecoder.decode(effectiveBytes);
+      if (decoded != null) {
+        _logger.d('_fetchAndDecode: TvBoxImageDecoder 解码成功');
+        return decoded;
+      }
+
+      // 步骤2：直接 UTF-8 解码后 JSON 解析（支持 TVBox 注释格式）
+      try {
+        final text = utf8.decode(effectiveBytes, allowMalformed: true).trim();
+        if (text.startsWith('{')) {
+          final json = _parseJsonWithComments(text);
+          if (json != null) {
+            _logger.d('_fetchAndDecode: UTF-8 JSON 解码成功');
+            return json;
+          }
+        }
+      } catch (_) {}
+
+      // 步骤3：提取 ASCII 文本后尝试 Base64 解码
+      final asciiText = String.fromCharCodes(
+        effectiveBytes.where((b) => b >= 32 && b <= 126),
+      );
+      if (asciiText.isNotEmpty) {
+        final json = _tryParseJsonOrBase64(asciiText);
+        if (json != null) {
+          _logger.d('_fetchAndDecode: ASCII Base64 解码成功');
+          return json;
+        }
+      }
+
+      _logger.e('_fetchAndDecode: 所有解码方式均失败, bytes长度=${effectiveBytes.length}');
+      throw Exception('JSON 解析失败: 无法识别的响应格式 (${effectiveBytes.length} bytes)');
+    } catch (e) {
+      _logger.e('_fetchAndDecode 失败: $e');
+      rethrow;
+    } finally {
+      client?.close();
     }
   }
 
@@ -562,61 +654,105 @@ class VideoApiService {
     return '${uri.scheme}://${uri.host}${uri.hasPort ? ':${uri.port}' : ''}${uri.path}$separator$query';
   }
 
-  /// 从响应中提取 JSON 数据
-  Map<String, dynamic> _extractJson(Response response) {
-    if (response.statusCode != 200) {
-      throw Exception('HTTP ${response.statusCode}');
-    }
-    final dynamic body = response.data;
-
-    if (body is Map<String, dynamic>) {
-      return body;
-    }
-
-    if (body is String) {
-      try {
-        final decoded = jsonDecode(body);
-        if (decoded is Map<String, dynamic>) {
-          return decoded;
-        }
-        throw Exception('JSON 不是对象格式');
-      } catch (e) {
-        throw Exception('JSON 解析失败: $e');
+  /// 尝试解析含 ** 分隔符的 Base64 或纯 Base64 文本
+  Map<String, dynamic>? _tryParseJsonOrBase64(String text) {
+    // 方式1：找 ** 分隔符后的 Base64
+    final markerIdx = text.indexOf('**');
+    if (markerIdx >= 0) {
+      final b64Data = text.substring(markerIdx + 2).trim();
+      if (b64Data.isNotEmpty) {
+        try {
+          final cleaned = b64Data.replaceAll(RegExp(r'[^A-Za-z0-9+/=]'), '');
+          if (cleaned.length >= 4) {
+            final decoded = base64Decode(cleaned);
+            final jsonStr = utf8.decode(decoded);
+            final json = _parseJsonWithComments(jsonStr);
+            if (json != null) return json;
+          }
+        } catch (_) {}
       }
     }
 
-    throw Exception('无效的响应格式: ${body.runtimeType}');
+    // 方式2：整个文本作为 Base64
+    if (text.length >= 4) {
+      try {
+        final cleaned = text.replaceAll(RegExp(r'[^A-Za-z0-9+/=]'), '');
+        if (cleaned.length >= 4) {
+          final decoded = base64Decode(cleaned);
+          final jsonStr = utf8.decode(decoded);
+          final json = _parseJsonWithComments(jsonStr);
+          if (json != null) return json;
+        }
+      } catch (_) {}
+    }
+
+    return null;
   }
 
-  /// 格式化 Dio 错误信息
-  String _formatDioError(DioException e) {
-    switch (e.type) {
-      case DioExceptionType.connectionTimeout:
-        return '连接超时，请检查网络';
-      case DioExceptionType.receiveTimeout:
-        return '接收超时，服务器响应过慢';
-      case DioExceptionType.sendTimeout:
-        return '发送超时';
-      case DioExceptionType.connectionError:
-        final msg = e.message ?? '';
-        if (msg.contains('Failed host lookup')) {
-          return 'DNS 解析失败，域名无法访问';
+  /// 解析可能包含 JavaScript 风格注释的 JSON
+  /// TVBox 配置文件常含 // 单行注释和 /* */ 多行注释
+  Map<String, dynamic>? _parseJsonWithComments(String text) {
+    // 先尝试直接解析
+    try {
+      final json = jsonDecode(text);
+      if (json is Map<String, dynamic>) return json;
+    } catch (_) {}
+
+    // 剥离注释后再解析
+    final cleaned = _stripJsonComments(text);
+    try {
+      final json = jsonDecode(cleaned);
+      if (json is Map<String, dynamic>) return json;
+    } catch (_) {}
+
+    return null;
+  }
+
+  /// 剥离 JSON 中的 JavaScript 风格注释
+  /// 支持 // 单行注释和 /* */ 多行注释
+  static String _stripJsonComments(String text) {
+    final sb = StringBuffer();
+    int i = 0;
+    bool inString = false;
+    String? stringChar;
+
+    while (i < text.length) {
+      if (inString) {
+        final ch = text[i];
+        sb.write(ch);
+        if (ch == '\\' && i + 1 < text.length) {
+          i++;
+          sb.write(text[i]);
+        } else if (ch == stringChar) {
+          inString = false;
         }
-        if (msg.contains('Connection refused')) {
-          return '服务器拒绝连接';
+        i++;
+        continue;
+      }
+
+      if (text[i] == '"' || text[i] == "'") {
+        inString = true;
+        stringChar = text[i];
+        sb.write(text[i]);
+        i++;
+      } else if (i + 1 < text.length && text[i] == '/' && text[i + 1] == '/') {
+        i += 2;
+        while (i < text.length && text[i] != '\n' && text[i] != '\r') {
+          i++;
         }
-        return '网络连接失败: $msg';
-      case DioExceptionType.badResponse:
-        return '服务器返回错误: HTTP ${e.response?.statusCode}';
-      case DioExceptionType.cancel:
-        return '请求已取消';
-      default:
-        final msg = e.message ?? '';
-        final errorStr = e.error?.toString() ?? '';
-        if (msg.isNotEmpty) return '网络错误: $msg';
-        if (errorStr.isNotEmpty) return '网络错误: $errorStr';
-        return '网络错误: 请检查接口地址是否正确';
+      } else if (i + 1 < text.length && text[i] == '/' && text[i + 1] == '*') {
+        i += 2;
+        while (i + 1 < text.length && !(text[i] == '*' && text[i + 1] == '/')) {
+          i++;
+        }
+        i += 2;
+      } else {
+        sb.write(text[i]);
+        i++;
+      }
     }
+
+    return sb.toString();
   }
 
   /// 获取 TVBox 配置文件
@@ -625,13 +761,12 @@ class VideoApiService {
       final url = _buildUrl(configUrl, {});
       _logger.d('获取TVBox配置: $url');
 
-      final response = await _dio.get(url);
-      final data = _extractJson(response);
-      return const TvBoxConfigParser().parse(data);
-    } on DioException catch (e) {
-      final errMsg = _formatDioError(e);
-      _logger.e('获取TVBox配置失败: $errMsg');
-      throw Exception(errMsg);
+      final json = await _fetchAndDecode(url);
+
+      final config = const TvBoxConfigParser().parse(json);
+      _logger.d('TVBox配置解析完成: ${config.sites.length}个站点, '
+          'spider=${config.spiderUrl}');
+      return config;
     } catch (e) {
       _logger.e('获取TVBox配置失败: $e');
       throw Exception('加载失败: $e');

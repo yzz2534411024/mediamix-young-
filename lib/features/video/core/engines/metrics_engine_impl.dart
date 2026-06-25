@@ -19,6 +19,10 @@ class MetricsEngineImpl implements MetricsEngine {
   /// 是否正在缓冲
   bool _isBuffering = false;
 
+  // ========== 会话状态 ==========
+  /// 是否有活跃会话
+  bool _hasActiveSession = false;
+
   @override
   bool get hasRecordedFirstFrame => _hasRecordedFirstFrame;
 
@@ -33,6 +37,7 @@ class MetricsEngineImpl implements MetricsEngine {
   void startSession(String videoId) {
     // 重置首帧标记
     _hasRecordedFirstFrame = false;
+    _hasActiveSession = true;
 
     // 委托给 PlayerMetricsService 开始会话
     PlayerMetricsService.instance.startSession(videoId);
@@ -40,6 +45,9 @@ class MetricsEngineImpl implements MetricsEngine {
 
   @override
   Map<String, dynamic>? endSession() {
+    if (!_hasActiveSession) return null;
+    _hasActiveSession = false;
+
     // 委托给 PlayerMetricsService 结束会话，获取指标数据
     final metrics = PlayerMetricsService.instance.endSession();
 
@@ -85,6 +93,7 @@ class MetricsEngineImpl implements MetricsEngine {
 
   @override
   Map<String, dynamic>? getCurrentMetrics() {
+    if (!_hasActiveSession) return null;
     final metrics = PlayerMetricsService.instance.getCurrentMetrics();
     return metrics?.toSummaryMap();
   }
@@ -112,5 +121,6 @@ class MetricsEngineImpl implements MetricsEngine {
     // 重置内部状态
     _hasRecordedFirstFrame = false;
     _isBuffering = false;
+    _hasActiveSession = false;
   }
 }

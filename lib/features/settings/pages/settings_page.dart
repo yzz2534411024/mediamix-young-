@@ -55,8 +55,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   @override
   Widget build(BuildContext context) {
     final sites = ref.watch(cmsSiteListProvider);
-    final currentSite = ref.watch(currentSiteProvider);
-    final themeMode = ref.watch(themeModeProvider);
     final themeOption = ref.read(themeModeProvider.notifier).currentOption;
 
     return Scaffold(
@@ -113,6 +111,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             value: _metricsEnabled,
             onChanged: (value) async {
               await PrivacyManagerService.instance.setMetricsEnabled(value);
+              if (!mounted) return;
               setState(() => _metricsEnabled = value);
             },
           ),
@@ -124,6 +123,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               value: _performanceDataEnabled,
               onChanged: (value) async {
                 await PrivacyManagerService.instance.setPerformanceDataEnabled(value);
+                if (!mounted) return;
                 setState(() => _performanceDataEnabled = value);
               },
             ),
@@ -134,6 +134,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               value: _wifiOnlyUpload,
               onChanged: (value) async {
                 await PrivacyManagerService.instance.setWifiOnlyUpload(value);
+                if (!mounted) return;
                 setState(() => _wifiOnlyUpload = value);
               },
             ),
@@ -161,10 +162,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
             title: const Text('立即上报'),
             subtitle: const Text('手动触发数据上报'),
             onTap: () async {
+              final messenger = ScaffoldMessenger.of(context);
               final result = await DataReporterService.instance.uploadNow();
               if (mounted) {
-                ScaffoldMessenger.of(context).clearSnackBars();
-                ScaffoldMessenger.of(context).showSnackBar(
+                messenger.clearSnackBars();
+                messenger.showSnackBar(
                   SnackBar(
                     content: Text(_getUploadResultText(result)),
                     duration: const Duration(seconds: 2),
@@ -330,12 +332,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ),
           TextButton(
             onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
               await DataReporterService.instance.clearAllLocalData();
               if (mounted) {
-                Navigator.pop(ctx);
+                Navigator.pop(context);
                 _refreshDataSummary();
-                ScaffoldMessenger.of(context).clearSnackBars();
-                ScaffoldMessenger.of(context).showSnackBar(
+                messenger.clearSnackBars();
+                messenger.showSnackBar(
                   const SnackBar(
                     content: Text('本地数据已清除'),
                     duration: Duration(seconds: 2),

@@ -332,4 +332,12 @@ class PowerManagerService {
     _isInitialized = false;
     _logger.i('电源管理服务已释放');
   }
+
+  /// 重置状态（仅用于测试）
+  void resetForTesting() {
+    _isInitialized = false;
+    _hasUserOverride = false;
+    _currentMode = PowerMode.balanced;
+    _batteryInfo = BatteryInfo.fallback;
+  }
 }

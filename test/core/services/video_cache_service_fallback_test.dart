@@ -12,6 +12,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:mediamix/features/video/core/engines/engine_interfaces.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   // ============================================================
   // 1. CacheResolveResult 数据类测试
   // ============================================================
@@ -358,8 +360,6 @@ void main() {
 
       // 模拟返回记录
       const record = (path: path, quality: quality);
-      expect(record.$1, equals(path));
-      expect(record.$2, equals(quality));
       expect(record.path, equals(path));
       expect(record.quality, equals(quality));
     });

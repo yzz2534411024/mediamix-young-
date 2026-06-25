@@ -2,9 +2,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
-import 'package:dio/io.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mediamix/features/video/models/video_models.dart';
 import 'package:mediamix/features/video/services/spider/json_spider.dart';
 import 'package:mediamix/features/video/services/spider/spider_adapter.dart';
 import 'package:mediamix/features/video/services/spider/spider_models.dart';

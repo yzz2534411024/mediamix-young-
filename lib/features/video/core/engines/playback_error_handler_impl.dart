@@ -50,6 +50,7 @@ class PlaybackErrorHandlerImpl implements PlaybackErrorHandler {
 
   // ========== 上次播放位置 ==========
   /// 上次播放位置（由 handleError 保存）
+  // ignore: unused_field
   Duration _lastPlaybackPosition = Duration.zero;
 
   @override
@@ -120,13 +121,10 @@ class PlaybackErrorHandlerImpl implements PlaybackErrorHandler {
       return ErrorHandleResult(action: ErrorAction.downgradeToSoftwareDecode);
     }
 
-    // 2. 检查是否为网络错误或离线/弱网 → 等待网络恢复
+    // 2. 检查是否为网络错误 → 等待网络恢复
     final isNetworkError = _isErrorNetworkRelated(error);
-    final networkOffline =
-        NetworkEngine.instance.currentCondition == NetworkCondition.offline ||
-            NetworkEngine.instance.currentCondition == NetworkCondition.weak;
 
-    if (isNetworkError || networkOffline) {
+    if (isNetworkError) {
       _logger.w('网络原因导致播放中断，等待网络恢复后自动重连');
       _isWaitingForNetwork = true;
       return ErrorHandleResult(action: ErrorAction.waitForNetworkRecovery);

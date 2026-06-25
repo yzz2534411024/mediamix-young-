@@ -240,6 +240,7 @@ void main() {
     test('缓冲 > 30s 但带宽不支持更高不升级', () async {
       final abr = ABRController();
       // 初始 medium，带宽 500 只支持 low，不会升级
+      abr.updateBuffer(const Duration(seconds: 10)); // 先设安全缓冲，避免触发降级
       abr.updateBandwidth(500);
       abr.updateBuffer(const Duration(seconds: 35));
       expect(abr.currentQuality, QualityLevel.medium); // target=low, index < medium
@@ -289,6 +290,7 @@ void main() {
     test('target 等级不高于当前时不升级且重置 _highBandwidthStart', () async {
       final abr = ABRController();
       // 初始 medium，带宽 1500 → target=medium，不高于当前
+      abr.updateBuffer(const Duration(seconds: 10)); // 先设安全缓冲，避免触发降级
       abr.updateBandwidth(1500);
       abr.updateBuffer(const Duration(seconds: 35));
       expect(abr.currentQuality, QualityLevel.medium); // 不变
@@ -430,7 +432,9 @@ void main() {
       final abr = ABRController(onQualityChanged: (_) {
         callCount++;
       });
-      // 初始 medium，缓冲 > 30s + 带宽支持 medium → target=medium，不升级
+      // 先设安全缓冲，避免 updateBandwidth 触发降级
+      abr.updateBuffer(const Duration(seconds: 10));
+      // 初始 medium，带宽 1500 → target=medium，不高于当前，不升级
       abr.updateBandwidth(1500);
       abr.updateBuffer(const Duration(seconds: 35));
       expect(callCount, 0);
