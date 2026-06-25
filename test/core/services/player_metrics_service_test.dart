@@ -286,6 +286,52 @@ void main() {
         expect(batch.first['type'], equals('first_frame_time'));
         expect(service.pendingReportCount, equals(0));
       });
+
+      test('startSession 调用后待上报队列被清空', () async {
+        service.setAlertThresholds(const AlertThresholds(firstFrameTimeMs: 0));
+        service.startSession('video_clear_1');
+        service.recordEvent(MetricsEvent.playStart);
+        await Future.delayed(const Duration(milliseconds: 5));
+        service.recordEvent(MetricsEvent.firstFrame);
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        expect(service.pendingReportCount, greaterThanOrEqualTo(1));
+
+        // 开始新会话，_loadPendingReports 重新加载持久化数据
+        service.startSession('video_clear_2');
+        await Future.delayed(const Duration(milliseconds: 100));
+
+        // 排空重新加载的数据
+        service.dequeuePendingReports(maxCount: 1000);
+        expect(service.pendingReportCount, equals(0));
+
+        // 新会话中触发告警，验证队列正常工作
+        service.recordEvent(MetricsEvent.playStart);
+        await Future.delayed(const Duration(milliseconds: 5));
+        service.recordEvent(MetricsEvent.firstFrame);
+        await Future.delayed(const Duration(milliseconds: 50));
+        expect(service.pendingReportCount, greaterThanOrEqualTo(1));
+      });
+
+      test('_emitAlert 触发后同时调用 _enqueueReport 和 _recordAlertTime', () async {
+        service.setAlertThresholds(const AlertThresholds(firstFrameTimeMs: 0));
+        service.startSession('video_emit_1');
+        service.recordEvent(MetricsEvent.playStart);
+        await Future.delayed(const Duration(milliseconds: 5));
+
+        // 触发告警
+        service.recordEvent(MetricsEvent.firstFrame);
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        // 验证 _enqueueReport 被调用（队列增加）
+        final countAfterAlert = service.pendingReportCount;
+        expect(countAfterAlert, greaterThanOrEqualTo(1));
+
+        // 验证 _recordAlertTime 被调用（去重生效，同类型告警不再增加）
+        service.recordEvent(MetricsEvent.firstFrame);
+        await Future.delayed(const Duration(milliseconds: 50));
+        expect(service.pendingReportCount, equals(countAfterAlert));
+      });
     });
 
     group('告警去重', () {
@@ -309,6 +355,27 @@ void main() {
         service.recordEvent(MetricsEvent.firstFrame);
         await Future.delayed(const Duration(milliseconds: 50));
         expect(service.pendingReportCount, equals(countAfterFirst));
+      });
+
+      test('不同 sessionId 的告警不会触发去重', () async {
+        service.setAlertThresholds(const AlertThresholds(firstFrameTimeMs: 0));
+
+        // 会话 1：触发告警
+        service.startSession('video_dedup_diff_1');
+        service.recordEvent(MetricsEvent.playStart);
+        await Future.delayed(const Duration(milliseconds: 5));
+        service.recordEvent(MetricsEvent.firstFrame);
+        await Future.delayed(const Duration(milliseconds: 50));
+        final countAfterFirst = service.pendingReportCount;
+        expect(countAfterFirst, greaterThanOrEqualTo(1));
+
+        // 会话 2（不同 sessionId）：触发同类型告警，不应被去重
+        service.startSession('video_dedup_diff_2');
+        service.recordEvent(MetricsEvent.playStart);
+        await Future.delayed(const Duration(milliseconds: 5));
+        service.recordEvent(MetricsEvent.firstFrame);
+        await Future.delayed(const Duration(milliseconds: 50));
+        expect(service.pendingReportCount, greaterThan(countAfterFirst));
       });
     });
 

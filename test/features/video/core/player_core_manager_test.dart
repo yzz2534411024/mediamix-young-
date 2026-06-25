@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mediamix/core/services/power_manager_service.dart';
 import 'package:mediamix/features/video/core/player_core_manager.dart';
+import 'package:mediamix/features/video/core/engines/engine_interfaces.dart';
 import 'package:mediamix/features/video/services/subtitle_service.dart';
 
 void main() {
@@ -527,6 +528,47 @@ void main() {
       manager.removeListener(listener);
       manager.notifyListeners();
       expect(notifyCount, 1);
+    });
+  });
+
+  // ===========================================================================
+  // ErrorAction 枚举穷举验证
+  // ===========================================================================
+  group('ErrorAction 枚举穷举', () {
+    test('包含所有 9 个枚举值', () {
+      expect(ErrorAction.values.length, 9);
+      expect(ErrorAction.values, contains(ErrorAction.downgradeToSoftwareDecode));
+      expect(ErrorAction.values, contains(ErrorAction.waitForNetworkRecovery));
+      expect(ErrorAction.values, contains(ErrorAction.retrySameUrl));
+      expect(ErrorAction.values, contains(ErrorAction.switchToNextQuality));
+      expect(ErrorAction.values, contains(ErrorAction.showErrorDialog));
+      expect(ErrorAction.values, contains(ErrorAction.recoverFromStuck));
+      expect(ErrorAction.values, contains(ErrorAction.recoverFromBlackScreen));
+      expect(ErrorAction.values, contains(ErrorAction.recoverFromSilence));
+      expect(ErrorAction.values, contains(ErrorAction.switchSource));
+    });
+
+    test('新增恢复动作名称正确', () {
+      expect(ErrorAction.recoverFromStuck.name, 'recoverFromStuck');
+      expect(ErrorAction.recoverFromBlackScreen.name, 'recoverFromBlackScreen');
+      expect(ErrorAction.recoverFromSilence.name, 'recoverFromSilence');
+      expect(ErrorAction.switchSource.name, 'switchSource');
+    });
+
+    test('ErrorHandleResult 可携带新增 action', () {
+      final r1 = ErrorHandleResult(action: ErrorAction.recoverFromStuck);
+      expect(r1.action, ErrorAction.recoverFromStuck);
+      expect(r1.nextQualityIndex, isNull);
+
+      final r2 = ErrorHandleResult(action: ErrorAction.switchSource, nextQualityIndex: 2);
+      expect(r2.action, ErrorAction.switchSource);
+      expect(r2.nextQualityIndex, 2);
+
+      final r3 = ErrorHandleResult(action: ErrorAction.recoverFromBlackScreen);
+      expect(r3.action, ErrorAction.recoverFromBlackScreen);
+
+      final r4 = ErrorHandleResult(action: ErrorAction.recoverFromSilence);
+      expect(r4.action, ErrorAction.recoverFromSilence);
     });
   });
 }

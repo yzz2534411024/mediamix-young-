@@ -636,14 +636,16 @@ class PlayerMetricsService {
     try {
       final prefs = await SharedPreferences.getInstance();
       final jsonStr = prefs.getString(_pendingReportsKey);
-      // 异步操作完成后再清理并填充，避免竞态覆盖新数据
+      // 异步完成后清理内存队列，再填充持久化数据
       _pendingReports.clear();
-      if (jsonStr != null && jsonStr.isNotEmpty) {
-        final data = jsonDecode(jsonStr) as List<dynamic>;
-        _pendingReports.addAll(data.cast<Map<String, dynamic>>());
-      }
+      if (jsonStr == null || jsonStr.isEmpty) return;
+
+      final data = jsonDecode(jsonStr) as List<dynamic>;
+      _pendingReports.addAll(data.cast<Map<String, dynamic>>());
       _logger.d('加载 ${_pendingReports.length} 条待上报数据');
     } catch (e) {
+      // 加载失败时也清理内存队列，避免单例跨会话残留脏数据
+      _pendingReports.clear();
       _logger.w('加载待上报数据失败: $e');
     }
   }
