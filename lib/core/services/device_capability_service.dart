@@ -245,6 +245,12 @@ class DeviceCapabilityService {
     return [
       const CodecCapability(
         codec: 'H.264',
+        maxWidth: 1920,
+        maxHeight: 1080,
+        hardwareDecodingSupported: true,
+      ),
+      const CodecCapability(
+        codec: 'H.264',
         maxWidth: 3840,
         maxHeight: 2160,
         hardwareDecodingSupported: true,
