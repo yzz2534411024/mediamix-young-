@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:logger/logger.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as p;
 import '../network/network_engine.dart' show NetworkEngine;
 
 // ============================================================================
@@ -245,13 +247,13 @@ class PlayerMetricsService {
 
   final Logger _logger = Logger(printer: SimplePrinter());
 
-  /// 持久化队列 SharedPreferences key
-  static const String _pendingReportsKey = 'pending_metrics_reports';
+  /// 持久化队列文件名
+  static const String _pendingReportsFile = 'pending_metrics.json';
 
   /// 最大持久化队列长度
   static const int _maxPendingReports = 100;
 
-  /// 待上报数据队列（内存 + SharedPreferences 双缓冲）
+  /// 待上报数据队列
   final List<Map<String, dynamic>> _pendingReports = [];
 
   /// 去重窗口（最近 N 分钟内相同类型的告警不重复上报）
@@ -634,33 +636,33 @@ class PlayerMetricsService {
   /// 加载持久化的待上报数据
   Future<void> _loadPendingReports() async {
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final jsonStr = prefs.getString(_pendingReportsKey);
-      // 异步完成后清理内存队列，再填充持久化数据
-      _pendingReports.clear();
-      if (jsonStr == null || jsonStr.isEmpty) return;
-
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File(p.join(dir.path, _pendingReportsFile));
+      if (!await file.exists()) return;
+      final jsonStr = await file.readAsString();
+      if (jsonStr.isEmpty) return;
       final data = jsonDecode(jsonStr) as List<dynamic>;
+      _pendingReports.clear();
       _pendingReports.addAll(data.cast<Map<String, dynamic>>());
       _logger.d('加载 ${_pendingReports.length} 条待上报数据');
     } catch (e) {
-      // 加载失败时也清理内存队列，避免单例跨会话残留脏数据
-      _pendingReports.clear();
       _logger.w('加载待上报数据失败: $e');
     }
   }
 
-  /// 保存待上报数据到 SharedPreferences
+  /// 保存待上报数据到磁盘（原子写入）
   Future<void> _savePendingReports() async {
     try {
-      // 限制队列长度
+      final dir = await getApplicationDocumentsDirectory();
+      final file = File(p.join(dir.path, _pendingReportsFile));
+      final tempFile = File(p.join(dir.path, '$_pendingReportsFile.tmp'));
       while (_pendingReports.length > _maxPendingReports) {
         _pendingReports.removeAt(0);
       }
-
-      final prefs = await SharedPreferences.getInstance();
       final jsonStr = jsonEncode(_pendingReports);
-      await prefs.setString(_pendingReportsKey, jsonStr);
+      await tempFile.writeAsString(jsonStr);
+      if (await file.exists()) await file.delete();
+      await tempFile.rename(file.path);
     } catch (e) {
       _logger.w('保存待上报数据失败: $e');
     }
@@ -669,11 +671,10 @@ class PlayerMetricsService {
   /// 添加报告到持久化队列
   void _enqueueReport(Map<String, dynamic> report) {
     _pendingReports.add(report);
-    // 同步裁剪，确保内存队列不超限
     while (_pendingReports.length > _maxPendingReports) {
       _pendingReports.removeAt(0);
     }
-    _savePendingReports(); // 异步持久化
+    _savePendingReports();
   }
 
   /// 获取并移除待上报数据（批量取出）

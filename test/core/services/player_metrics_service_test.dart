@@ -1,6 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mediamix/core/services/player_metrics_service.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('PlayerMetricsService', () {
@@ -255,10 +254,6 @@ void main() {
     });
 
     group('持久化队列', () {
-      setUp(() {
-        SharedPreferences.setMockInitialValues({});
-      });
-
       test('触发告警后 pendingReportCount 增加', () async {
         service.setAlertThresholds(const AlertThresholds(firstFrameTimeMs: 0));
         service.startSession('video_persist_1');
@@ -273,6 +268,8 @@ void main() {
       test('dequeuePendingReports 取出并移除数据', () async {
         service.setAlertThresholds(const AlertThresholds(firstFrameTimeMs: 0));
         service.startSession('video_dequeue_1');
+        // 排空可能残留的跨测试脏数据
+        service.dequeuePendingReports(maxCount: 1000);
         service.recordEvent(MetricsEvent.playStart);
         await Future.delayed(const Duration(milliseconds: 5));
         service.recordEvent(MetricsEvent.firstFrame);
@@ -335,10 +332,6 @@ void main() {
     });
 
     group('告警去重', () {
-      setUp(() {
-        SharedPreferences.setMockInitialValues({});
-      });
-
       test('同类型告警在去重窗口内不重复上报', () async {
         service.setAlertThresholds(const AlertThresholds(firstFrameTimeMs: 0));
         service.startSession('video_dedup_1');
@@ -380,10 +373,6 @@ void main() {
     });
 
     group('队列上限', () {
-      setUp(() {
-        SharedPreferences.setMockInitialValues({});
-      });
-
       test('超过 _maxPendingReports 时移除最早的报告', () async {
         service.setAlertThresholds(const AlertThresholds(firstFrameTimeMs: 0));
 
