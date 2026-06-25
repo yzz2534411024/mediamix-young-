@@ -882,6 +882,7 @@ class VideoCacheService {
     try {
       final cacheDir = await _getCacheDirectory();
       final indexFile = File(p.join(cacheDir, _indexFileName));
+      final tempFile = File(p.join(cacheDir, '$_indexFileName.tmp'));
 
       final entriesMap = <String, dynamic>{};
       for (final entry in _diskIndex.entries) {
@@ -889,7 +890,14 @@ class VideoCacheService {
       }
 
       final jsonStr = jsonEncode({'entries': entriesMap});
-      await indexFile.writeAsString(jsonStr);
+
+      // 先写入临时文件
+      await tempFile.writeAsString(jsonStr);
+      // 原子替换：删除旧文件，重命名临时文件
+      if (await indexFile.exists()) {
+        await indexFile.delete();
+      }
+      await tempFile.rename(indexFile.path);
     } catch (e) {
       _logger.e('保存磁盘索引失败: $e');
     }

@@ -617,6 +617,244 @@ void main() {
     });
 
     // ========================================================================
+    // handleError — 状态机异常恢复
+    // ========================================================================
+    group('handleError — 状态机异常恢复', () {
+      test('卡死异常(stuck) → recoverFromStuck', () {
+        final result = handler.handleError(
+          'player stuck detected',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: const Duration(seconds: 10),
+        );
+        expect(result.action, equals(ErrorAction.recoverFromStuck));
+      });
+
+      test('死锁异常(deadlock) → recoverFromStuck', () {
+        final result = handler.handleError(
+          'deadlock in player',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.recoverFromStuck));
+      });
+
+      test('无帧异常(no frame) → recoverFromStuck', () {
+        final result = handler.handleError(
+          'no frame rendered',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.recoverFromStuck));
+      });
+
+      test('黑屏异常(black screen) → recoverFromBlackScreen', () {
+        final result = handler.handleError(
+          'black screen detected',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: const Duration(seconds: 30),
+        );
+        expect(result.action, equals(ErrorAction.recoverFromBlackScreen));
+      });
+
+      test('无视频流(no video) → recoverFromBlackScreen', () {
+        final result = handler.handleError(
+          'no video stream',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.recoverFromBlackScreen));
+      });
+
+      test('渲染失败(rendering_failed) → recoverFromBlackScreen', () {
+        final result = handler.handleError(
+          'rendering_failed',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.recoverFromBlackScreen));
+      });
+
+      test('无声异常(no audio) → recoverFromSilence', () {
+        final result = handler.handleError(
+          'no audio output',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: const Duration(seconds: 20),
+        );
+        expect(result.action, equals(ErrorAction.recoverFromSilence));
+      });
+
+      test('无声异常(silence) → recoverFromSilence', () {
+        final result = handler.handleError(
+          'silence detected',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.recoverFromSilence));
+      });
+
+      test('音频输出失败(audio output failed) → recoverFromSilence', () {
+        final result = handler.handleError(
+          'audio output failed',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.recoverFromSilence));
+      });
+
+      test('状态机异常优先级高于编解码错误', () {
+        // 同时包含 stuck 和 codec 关键词，stuck 应优先
+        final result = handler.handleError(
+          'stuck codec error',
+          hardwareDecodingEnabled: true,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.recoverFromStuck));
+      });
+    });
+
+    // ========================================================================
+    // handleError — 源站错误
+    // ========================================================================
+    group('handleError — 源站错误', () {
+      test('HTTP 404 错误 → 直接切换源，不重试同 URL', () {
+        handler.qualityCount = 3;
+        final result = handler.handleError(
+          'HTTP 404 Not Found',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: true,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.switchToNextQuality));
+        expect(result.nextQualityIndex, isNotNull);
+        expect(handler.retryCount, equals(0)); // 不应增加重试计数
+      });
+
+      test('HTTP 403 错误 → 直接切换源', () {
+        handler.qualityCount = 3;
+        final result = handler.handleError(
+          'HTTP 403 Forbidden',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: true,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.switchToNextQuality));
+      });
+
+      test('源站错误 + 无清晰度选项 → 显示错误对话框', () {
+        final result = handler.handleError(
+          'HTTP 404 Not Found',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.showErrorDialog));
+      });
+
+      test('源站错误 + 所有清晰度已尝试 → 显示错误对话框', () {
+        handler.qualityCount = 2;
+        handler.addTriedQualityIndex(0);
+        handler.addTriedQualityIndex(1);
+
+        final result = handler.handleError(
+          'HTTP 404 Not Found',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: true,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.showErrorDialog));
+      });
+
+      test('源站错误不重试同 URL（retryCount 不增加）', () {
+        handler.qualityCount = 3;
+        handler.handleError(
+          'HTTP 404 Not Found',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: true,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(handler.retryCount, equals(0));
+      });
+    });
+
+    // ========================================================================
+    // handleError — 超时错误重试策略
+    // ========================================================================
+    group('handleError — 超时错误重试策略', () {
+      test('纯超时错误(timed out) → 重试同 URL', () {
+        // "timed out" 不含网络关键词，走 timeout 分支
+        final result = handler.handleError(
+          'request timed out',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.retrySameUrl));
+        expect(handler.retryCount, equals(1));
+      });
+
+      test('超时错误重试达上限后 → 走降级或错误', () {
+        // 第一次超时重试
+        handler.handleError(
+          'request timed out',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(handler.retryCount, equals(1));
+
+        // 第二次超时，重试已达上限
+        final result = handler.handleError(
+          'request timed out again',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.showErrorDialog));
+      });
+
+      test('含 timeout 的网络错误 → 走网络恢复（network 分类优先）', () {
+        // "timeout" 被 _isErrorNetworkRelated 匹配，归为 network
+        final result = handler.handleError(
+          'timeout error',
+          hardwareDecodingEnabled: false,
+          hasQualityOptions: false,
+          currentQualityIndex: 0,
+          lastPlaybackPosition: Duration.zero,
+        );
+        expect(result.action, equals(ErrorAction.waitForNetworkRecovery));
+        expect(handler.isWaitingForNetwork, isTrue);
+      });
+    });
+
+    // ========================================================================
     // handleError — 编解码错误优先级高于网络错误
     // ========================================================================
     group('handleError — 错误优先级', () {

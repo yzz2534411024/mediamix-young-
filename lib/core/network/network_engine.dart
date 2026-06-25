@@ -226,6 +226,16 @@ class NetworkEngine {
   final _dnsCache = <String, DateTime>{};
   static const _dnsCacheTtl = Duration(minutes: 10);
 
+  // CDN 调度缓存
+  final _cdnCache = <String, _CdnCacheEntry>{};
+
+  /// DNS 服务器列表
+  static const List<String> _dnsServers = [
+    'system',        // 系统 DNS
+    '114.114.114.114', // 114 DNS
+    '8.8.8.8',       // Google DNS
+  ];
+
   // 带宽估算器
   final BandwidthEstimator _bandwidthEstimator = BandwidthEstimator();
 
@@ -351,16 +361,14 @@ class NetworkEngine {
   }
 
   Future<void> _resolveHost(String host) async {
-    // 优先使用 DNS-over-HTTPS，失败时回退系统 DNS
-    final dohResult = await _resolveWithDoH(host);
-    if (dohResult != null) {
-      _dnsCache[host] = DateTime.now();
-      _logger.d('DoH解析成功: $host -> $dohResult');
+    // 跳过 localhost / IP 地址
+    if (host == 'localhost' || host == '127.0.0.1' ||
+        RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(host)) {
       return;
     }
 
     try {
-      final addresses = await InternetAddress.lookup(host);
+      final addresses = await _resolveWithFallback(host);
       if (addresses.isNotEmpty) {
         _dnsCache[host] = DateTime.now();
         _logger.d('DNS 预解析成功: $host -> ${addresses.first.address}');
@@ -370,48 +378,44 @@ class NetworkEngine {
     }
   }
 
-  /// 通过 DNS-over-HTTPS 解析域名，返回第一个 IPv4 地址
-  Future<String?> _resolveWithDoH(String host) async {
-    // 跳过 localhost / IP 地址
-    if (host == 'localhost' || host == '127.0.0.1' ||
-        RegExp(r'^\d+\.\d+\.\d+\.\d+$').hasMatch(host)) {
-      return null;
+  /// 使用指定 DNS 服务器解析域名
+  /// 对于系统 DNS，使用 Dart 的 InternetAddress.lookup
+  /// 对于第三方 DNS，使用 HTTP DNS-over-HTTPS (DoH) 查询
+  Future<List<InternetAddress>> _resolveWithDns(String host, String dnsServer) async {
+    if (dnsServer == 'system') {
+      return await InternetAddress.lookup(host);
+    }
+    // DoH 查询
+    final dohUrl = dnsServer == '114.114.114.114'
+        ? 'https://dns.114dns.com/resolve?name=$host&type=A'
+        : 'https://dns.google/resolve?name=$host&type=A';
+
+    final response = await _dio.get(dohUrl, options: Options(connectTimeout: const Duration(seconds: 2)));
+    final data = response.data as Map<String, dynamic>;
+    final answers = data['Answer'] as List<dynamic>?;
+    if (answers == null || answers.isEmpty) {
+      throw Exception('DNS 查询无结果');
     }
 
-    final dohEndpoints = [
-      'https://dns.google/resolve?name=$host&type=A',
-      'https://cloudflare-dns.com/dns-query?name=$host&type=A',
-    ];
+    return answers
+        .where((a) => a['type'] == 1) // A record
+        .map((a) => InternetAddress(a['data'] as String))
+        .toList();
+  }
 
-    for (final endpoint in dohEndpoints) {
+  /// DNS 预解析带多服务器轮询
+  Future<List<InternetAddress>> _resolveWithFallback(String host) async {
+    for (final dns in _dnsServers) {
       try {
-        final response = await _dio.get(
-          endpoint,
-          options: Options(
-            headers: {'Accept': 'application/dns-json'},
-            receiveTimeout: const Duration(seconds: 3),
-            sendTimeout: const Duration(seconds: 3),
-            connectTimeout: const Duration(seconds: 3),
-          ),
-        );
-
-        if (response.statusCode == 200 && response.data != null) {
-          final data = response.data as Map<String, dynamic>;
-          final answers = data['Answer'] as List<dynamic>?;
-          if (answers != null && answers.isNotEmpty) {
-            for (final ans in answers) {
-              final a = ans as Map<String, dynamic>;
-              if (a['type'] == 1) {
-                return a['data'] as String?;
-              }
-            }
-          }
-        }
-      } catch (_) {
-        // DoH 不可用时静默失败，回退到系统 DNS
+        final result = await _resolveWithDns(host, dns);
+        if (result.isNotEmpty) return result;
+      } catch (e) {
+        _logger.d('DNS $dns 解析 $host 失败: $e，尝试下一个');
+        continue;
       }
     }
-    return null;
+    // 所有 DNS 都失败，回退到系统 DNS
+    return await InternetAddress.lookup(host);
   }
 
   /// 并发请求 - 核心优化：多源同时加载
@@ -513,6 +517,92 @@ class NetworkEngine {
   void clearDnsCache() {
     _dnsCache.clear();
     _logger.d('DNS 缓存已清除');
+  }
+
+  /// 并行 TCP 测速选择最优 CDN 节点
+  ///
+  /// 同时向所有 CDN 节点发起 HEAD 请求，选择延迟最低的节点
+  /// [cdnUrls] CDN 节点 URL 列表
+  /// [timeout] 单个节点测速超时时间，默认 3 秒
+  /// [cacheTtl] 测速结果缓存时间，默认 5 分钟
+  Future<String> selectBestCdn(
+    List<String> cdnUrls, {
+    Duration timeout = const Duration(seconds: 3),
+    Duration cacheTtl = const Duration(minutes: 5),
+  }) async {
+    if (cdnUrls.length <= 1) return cdnUrls.first;
+
+    // 检查 CDN 调度缓存
+    final cacheKey = cdnUrls.join('|');
+    final cached = _cdnCache[cacheKey];
+    if (cached != null && DateTime.now().difference(cached.time) < cacheTtl) {
+      _logger.d('CDN调度缓存命中: ${cached.bestUrl}');
+      return cached.bestUrl;
+    }
+
+    // 并行测速所有 CDN 节点
+    final latencies = <String, int>{};
+    await Future.wait(
+      cdnUrls.map((url) async {
+        final stopwatch = Stopwatch()..start();
+        try {
+          await _dio.head(
+            url,
+            options: Options(
+              sendTimeout: timeout,
+              receiveTimeout: timeout,
+              connectTimeout: timeout,
+            ),
+          );
+          stopwatch.stop();
+          latencies[url] = stopwatch.elapsedMilliseconds;
+        } catch (e) {
+          stopwatch.stop();
+          // HEAD 失败尝试 GET（部分服务器不支持 HEAD）
+          stopwatch.reset();
+          stopwatch.start();
+          try {
+            await _dio.get(
+              url,
+              options: Options(
+                sendTimeout: timeout,
+                receiveTimeout: timeout,
+                connectTimeout: timeout,
+              ),
+            );
+            stopwatch.stop();
+            latencies[url] = stopwatch.elapsedMilliseconds;
+          } catch (_) {
+            stopwatch.stop();
+            _logger.w('CDN测速失败: $url - $e');
+            latencies[url] = 99999; // 不可达标记
+          }
+        }
+      }),
+      eagerError: false,
+    );
+
+    // 选择延迟最低的节点
+    final bestEntry = latencies.entries.reduce(
+      (a, b) => a.value < b.value ? a : b,
+    );
+    final bestUrl = bestEntry.key;
+    _logger.d('CDN调度选择: $bestUrl (${bestEntry.value}ms)');
+
+    // 缓存结果
+    _cdnCache[cacheKey] = _CdnCacheEntry(
+      bestUrl: bestUrl,
+      latencyMs: bestEntry.value,
+      time: DateTime.now(),
+    );
+
+    return bestUrl;
+  }
+
+  /// 清除 CDN 调度缓存
+  void clearCdnCache() {
+    _cdnCache.clear();
+    _logger.d('CDN 调度缓存已清除');
   }
 
   /// 清除请求缓存
@@ -856,6 +946,20 @@ class _CacheEntry {
     this.bodySize = 0,
     this.eTag,
     this.lastModified,
+  });
+}
+
+// ==================== CDN 调度缓存条目 ====================
+
+class _CdnCacheEntry {
+  final String bestUrl;
+  final int latencyMs;
+  final DateTime time;
+
+  _CdnCacheEntry({
+    required this.bestUrl,
+    required this.latencyMs,
+    required this.time,
   });
 }
 

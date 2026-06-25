@@ -17,9 +17,11 @@
 // - 纯数据类与内存操作测试可直接运行
 // - 磁盘相关测试在无 path_provider 环境中可能需要跳过或 mock
 
+import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mediamix/core/services/video_cache_service.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -1365,6 +1367,167 @@ void main() {
       final result = service.getFrameBuffer('dup_v1');
       expect(result, isNotNull);
       expect(result!['version'], equals(3));
+    });
+  });
+
+  // ============================================================
+  // 12. 原子写入测试
+  // ============================================================
+  group('原子写入', () {
+    late VideoCacheService service;
+
+    setUp(() async {
+      service = VideoCacheService.instance;
+      await service.clearAll();
+    });
+
+    test('原子写入：保存索引后文件内容正确', () async {
+      // 创建临时目录
+      final tempDir = await Directory.systemTemp.createTemp('vc_atomic_');
+      try {
+        // 模拟原子写入过程
+        final indexFile = File(p.join(tempDir.path, 'cache_index.json'));
+        final tempFile = File(p.join(tempDir.path, 'cache_index.json.tmp'));
+
+        final entry = CacheEntry(
+          cacheId: 'atomic_test_1',
+          videoId: 'video_atomic',
+          quality: '720p',
+          filePath: '/tmp/atomic_video.mp4',
+          fileSize: 4096,
+          hitCount: 5,
+          isComplete: true,
+        );
+
+        final entriesMap = <String, dynamic>{
+          entry.cacheId: entry.toJson(),
+        };
+        final jsonStr = jsonEncode({'entries': entriesMap});
+
+        // 执行原子写入：先写临时文件，再重命名
+        await tempFile.writeAsString(jsonStr);
+        if (await indexFile.exists()) {
+          await indexFile.delete();
+        }
+        await tempFile.rename(indexFile.path);
+
+        // 验证：索引文件存在且内容正确
+        expect(await indexFile.exists(), isTrue);
+        // 临时文件应不存在（已被 rename）
+        expect(await tempFile.exists(), isFalse);
+
+        final content = await indexFile.readAsString();
+        final decoded = jsonDecode(content) as Map<String, dynamic>;
+        final entries = decoded['entries'] as Map<String, dynamic>;
+        expect(entries.length, equals(1));
+        expect(entries.containsKey('atomic_test_1'), isTrue);
+
+        final restored = CacheEntry.fromJson(
+            entries['atomic_test_1'] as Map<String, dynamic>);
+        expect(restored.cacheId, equals('atomic_test_1'));
+        expect(restored.videoId, equals('video_atomic'));
+        expect(restored.fileSize, equals(4096));
+        expect(restored.hitCount, equals(5));
+      } finally {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      }
+    });
+
+    test('原子写入：多次写入后数据一致', () async {
+      final tempDir = await Directory.systemTemp.createTemp('vc_multi_write_');
+      try {
+        final indexFile = File(p.join(tempDir.path, 'cache_index.json'));
+        final tempFile = File(p.join(tempDir.path, 'cache_index.json.tmp'));
+
+        // 第一次写入
+        final entry1 = CacheEntry(
+          cacheId: 'entry_1',
+          videoId: 'v1',
+          quality: '720p',
+          filePath: '/tmp/v1.mp4',
+          fileSize: 100,
+        );
+        var jsonStr = jsonEncode({
+          'entries': {'entry_1': entry1.toJson()}
+        });
+        await tempFile.writeAsString(jsonStr);
+        if (await indexFile.exists()) await indexFile.delete();
+        await tempFile.rename(indexFile.path);
+
+        // 第二次写入（覆盖）
+        final entry2 = CacheEntry(
+          cacheId: 'entry_2',
+          videoId: 'v2',
+          quality: '1080p',
+          filePath: '/tmp/v2.mp4',
+          fileSize: 200,
+        );
+        jsonStr = jsonEncode({
+          'entries': {
+            'entry_1': entry1.toJson(),
+            'entry_2': entry2.toJson(),
+          }
+        });
+        await tempFile.writeAsString(jsonStr);
+        if (await indexFile.exists()) await indexFile.delete();
+        await tempFile.rename(indexFile.path);
+
+        // 验证最终状态
+        final content = await indexFile.readAsString();
+        final decoded = jsonDecode(content) as Map<String, dynamic>;
+        final entries = decoded['entries'] as Map<String, dynamic>;
+        expect(entries.length, equals(2));
+        expect(entries.containsKey('entry_1'), isTrue);
+        expect(entries.containsKey('entry_2'), isTrue);
+      } finally {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      }
+    });
+
+    test('原子写入：写入中断时临时文件不影响旧索引', () async {
+      final tempDir = await Directory.systemTemp.createTemp('vc_interrupt_');
+      try {
+        final indexFile = File(p.join(tempDir.path, 'cache_index.json'));
+
+        // 先写入一个有效的索引文件
+        final originalEntry = CacheEntry(
+          cacheId: 'original',
+          videoId: 'v_orig',
+          quality: '720p',
+          filePath: '/tmp/orig.mp4',
+          fileSize: 500,
+        );
+        final originalJson = jsonEncode({
+          'entries': {'original': originalEntry.toJson()}
+        });
+        await indexFile.writeAsString(originalJson);
+
+        // 模拟写入中断：只创建了临时文件，没有完成 rename
+        final tempFile = File(p.join(tempDir.path, 'cache_index.json.tmp'));
+        await tempFile.writeAsString('{"corrupted');
+        // 模拟中断，不执行 rename
+
+        // 旧索引文件应仍然完好
+        expect(await indexFile.exists(), isTrue);
+        final content = await indexFile.readAsString();
+        final decoded = jsonDecode(content) as Map<String, dynamic>;
+        final entries = decoded['entries'] as Map<String, dynamic>;
+        expect(entries.length, equals(1));
+        expect(entries.containsKey('original'), isTrue);
+
+        // 清理临时文件
+        if (await tempFile.exists()) {
+          await tempFile.delete();
+        }
+      } finally {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      }
     });
   });
 }

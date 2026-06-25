@@ -444,6 +444,68 @@ void main() {
     });
   });
 
+  // ==================== DNS 多服务器轮询 ====================
+  group('DNS 多服务器轮询', () {
+    test('preResolveDns — 第一个 DNS 失败后自动尝试下一个', () async {
+      // preResolveDns 内部使用 _resolveWithFallback 轮询多个 DNS 服务器
+      // 即使某些 DNS 服务器不可达，也不应抛出异常
+      final engine = NetworkEngine.instance;
+      engine.clearDnsCache();
+
+      // 使用一个真实域名，验证轮询机制能成功解析
+      await engine.preResolveDns(['https://www.baidu.com']);
+      // 不抛异常即为通过（内部会轮询 system -> 114 -> 8.8.8.8）
+    });
+
+    test('preResolveDns — 无效 URL 被安全跳过', () async {
+      final engine = NetworkEngine.instance;
+      engine.clearDnsCache();
+
+      // 无效 URL 不应导致异常
+      await engine.preResolveDns(['not-a-valid-url', '', 'https://']);
+    });
+
+    test('preResolveDns — 缓存命中时跳过解析', () async {
+      final engine = NetworkEngine.instance;
+      engine.clearDnsCache();
+
+      // 第一次解析
+      await engine.preResolveDns(['https://www.baidu.com']);
+      // 第二次应命中缓存，不会再次解析
+      await engine.preResolveDns(['https://www.baidu.com']);
+    });
+  });
+
+  // ==================== CDN 调度 ====================
+  group('CDN 调度', () {
+    test('selectBestCdn — 单个 URL 直接返回', () async {
+      final engine = NetworkEngine.instance;
+      engine.clearCdnCache();
+
+      final result = await engine.selectBestCdn(['https://example.com/video.mp4']);
+      expect(result, equals('https://example.com/video.mp4'));
+    });
+
+    test('selectBestCdn — 空列表处理', () async {
+      final engine = NetworkEngine.instance;
+      engine.clearCdnCache();
+
+      // 空列表应该抛出异常或返回空字符串
+      try {
+        await engine.selectBestCdn([]);
+        fail('Expected an exception for empty list');
+      } catch (e) {
+        // 预期行为：空列表会出错
+        expect(e, isA<Error>());
+      }
+    });
+
+    test('clearCdnCache — 清除缓存不抛异常', () {
+      final engine = NetworkEngine.instance;
+      expect(() => engine.clearCdnCache(), returnsNormally);
+    });
+  });
+
   // ==================== NetworkCondition 枚举 ====================
   group('NetworkCondition', () {
     test('包含所有预期值', () {

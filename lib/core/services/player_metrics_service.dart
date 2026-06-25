@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:logger/logger.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../network/network_engine.dart' show NetworkEngine;
 
 // ============================================================================
@@ -243,6 +245,21 @@ class PlayerMetricsService {
 
   final Logger _logger = Logger(printer: SimplePrinter());
 
+  /// 持久化队列 SharedPreferences key
+  static const String _pendingReportsKey = 'pending_metrics_reports';
+
+  /// 最大持久化队列长度
+  static const int _maxPendingReports = 100;
+
+  /// 待上报数据队列（内存 + SharedPreferences 双缓冲）
+  final List<Map<String, dynamic>> _pendingReports = [];
+
+  /// 去重窗口（最近 N 分钟内相同类型的告警不重复上报）
+  static const Duration _dedupeWindow = Duration(minutes: 5);
+
+  /// 最近上报的告警记录（type + session_id → 时间戳）
+  final Map<String, DateTime> _recentAlerts = {};
+
   /// 当前活跃会话状态
   _SessionState? _currentSession;
 
@@ -294,6 +311,9 @@ class PlayerMetricsService {
     if (_currentSession != null) {
       endSession();
     }
+
+    // 异步加载持久化的待上报数据
+    _loadPendingReports();
 
     final sessionId = _generateSessionId();
     _currentSession = _SessionState(
@@ -585,14 +605,107 @@ class PlayerMetricsService {
   }
 
   void _emitAlert(String alertType, String message) {
+    final sessionId = _currentMetrics?.sessionId ?? '';
+
+    // 去重检查
+    if (_shouldDedupeAlert(alertType, sessionId)) {
+      _logger.d('告警去重: $alertType (会话 $sessionId)');
+      return;
+    }
+
     _logger.w('[告警] $message');
-    _alertController.add({
+    final report = {
       'type': alertType,
       'message': message,
-      'session_id': _currentMetrics?.sessionId,
+      'session_id': sessionId,
       'video_id': _currentMetrics?.videoId,
       'timestamp': DateTime.now().toIso8601String(),
-    });
+    };
+
+    _alertController.add(report);
+    _enqueueReport(report); // 持久化
+    _recordAlertTime(alertType, sessionId); // 记录去重
+  }
+
+  // ==========================================================================
+  // 持久化队列
+  // ==========================================================================
+
+  /// 加载持久化的待上报数据
+  Future<void> _loadPendingReports() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr = prefs.getString(_pendingReportsKey);
+      // 异步操作完成后再清理并填充，避免竞态覆盖新数据
+      _pendingReports.clear();
+      if (jsonStr != null && jsonStr.isNotEmpty) {
+        final data = jsonDecode(jsonStr) as List<dynamic>;
+        _pendingReports.addAll(data.cast<Map<String, dynamic>>());
+      }
+      _logger.d('加载 ${_pendingReports.length} 条待上报数据');
+    } catch (e) {
+      _logger.w('加载待上报数据失败: $e');
+    }
+  }
+
+  /// 保存待上报数据到 SharedPreferences
+  Future<void> _savePendingReports() async {
+    try {
+      // 限制队列长度
+      while (_pendingReports.length > _maxPendingReports) {
+        _pendingReports.removeAt(0);
+      }
+
+      final prefs = await SharedPreferences.getInstance();
+      final jsonStr = jsonEncode(_pendingReports);
+      await prefs.setString(_pendingReportsKey, jsonStr);
+    } catch (e) {
+      _logger.w('保存待上报数据失败: $e');
+    }
+  }
+
+  /// 添加报告到持久化队列
+  void _enqueueReport(Map<String, dynamic> report) {
+    _pendingReports.add(report);
+    // 同步裁剪，确保内存队列不超限
+    while (_pendingReports.length > _maxPendingReports) {
+      _pendingReports.removeAt(0);
+    }
+    _savePendingReports(); // 异步持久化
+  }
+
+  /// 获取并移除待上报数据（批量取出）
+  List<Map<String, dynamic>> dequeuePendingReports({int maxCount = 50}) {
+    final count = maxCount < _pendingReports.length ? maxCount : _pendingReports.length;
+    final batch = _pendingReports.sublist(0, count);
+    _pendingReports.removeRange(0, count);
+    _savePendingReports();
+    return batch;
+  }
+
+  /// 当前待上报数据数量
+  int get pendingReportCount => _pendingReports.length;
+
+  // ==========================================================================
+  // 告警去重
+  // ==========================================================================
+
+  /// 检查告警是否应该去重（跳过）
+  bool _shouldDedupeAlert(String alertType, String sessionId) {
+    final key = '${alertType}_$sessionId';
+    final lastTime = _recentAlerts[key];
+    if (lastTime == null) return false;
+    return DateTime.now().difference(lastTime) < _dedupeWindow;
+  }
+
+  /// 记录告警上报时间
+  void _recordAlertTime(String alertType, String sessionId) {
+    final key = '${alertType}_$sessionId';
+    _recentAlerts[key] = DateTime.now();
+
+    // 清理过期记录（超过去重窗口2倍的）
+    _recentAlerts.removeWhere((_, time) =>
+        DateTime.now().difference(time) > _dedupeWindow * 2);
   }
 
   // ==========================================================================

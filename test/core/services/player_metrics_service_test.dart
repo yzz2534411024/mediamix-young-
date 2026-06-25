@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:mediamix/core/services/player_metrics_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('PlayerMetricsService', () {
@@ -250,6 +251,90 @@ void main() {
         final metrics = service.getCurrentMetrics();
         expect(metrics, isNotNull);
         expect(metrics!.videoId, equals('video_001'));
+      });
+    });
+
+    group('持久化队列', () {
+      setUp(() {
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      test('触发告警后 pendingReportCount 增加', () async {
+        service.setAlertThresholds(const AlertThresholds(firstFrameTimeMs: 0));
+        service.startSession('video_persist_1');
+        service.recordEvent(MetricsEvent.playStart);
+        await Future.delayed(const Duration(milliseconds: 5));
+        service.recordEvent(MetricsEvent.firstFrame);
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        expect(service.pendingReportCount, greaterThanOrEqualTo(1));
+      });
+
+      test('dequeuePendingReports 取出并移除数据', () async {
+        service.setAlertThresholds(const AlertThresholds(firstFrameTimeMs: 0));
+        service.startSession('video_dequeue_1');
+        service.recordEvent(MetricsEvent.playStart);
+        await Future.delayed(const Duration(milliseconds: 5));
+        service.recordEvent(MetricsEvent.firstFrame);
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final before = service.pendingReportCount;
+        expect(before, greaterThanOrEqualTo(1));
+
+        final batch = service.dequeuePendingReports(maxCount: 50);
+        expect(batch.length, greaterThanOrEqualTo(1));
+        expect(batch.first['type'], equals('first_frame_time'));
+        expect(service.pendingReportCount, equals(0));
+      });
+    });
+
+    group('告警去重', () {
+      setUp(() {
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      test('同类型告警在去重窗口内不重复上报', () async {
+        service.setAlertThresholds(const AlertThresholds(firstFrameTimeMs: 0));
+        service.startSession('video_dedup_1');
+        service.recordEvent(MetricsEvent.playStart);
+        await Future.delayed(const Duration(milliseconds: 5));
+
+        // 第一次触发告警
+        service.recordEvent(MetricsEvent.firstFrame);
+        await Future.delayed(const Duration(milliseconds: 50));
+        final countAfterFirst = service.pendingReportCount;
+        expect(countAfterFirst, greaterThanOrEqualTo(1));
+
+        // 再次触发同类型告警（同一 session），应被去重
+        service.recordEvent(MetricsEvent.firstFrame);
+        await Future.delayed(const Duration(milliseconds: 50));
+        expect(service.pendingReportCount, equals(countAfterFirst));
+      });
+    });
+
+    group('队列上限', () {
+      setUp(() {
+        SharedPreferences.setMockInitialValues({});
+      });
+
+      test('超过 _maxPendingReports 时移除最早的报告', () async {
+        service.setAlertThresholds(const AlertThresholds(firstFrameTimeMs: 0));
+
+        // 创建 101 个会话，每个触发 first_frame_time 告警
+        // 每个会话有不同 sessionId，因此去重不会拦截
+        for (int i = 0; i < 101; i++) {
+          service.startSession('video_limit_$i');
+          service.recordEvent(MetricsEvent.playStart);
+          await Future.delayed(const Duration(milliseconds: 2));
+          service.recordEvent(MetricsEvent.firstFrame);
+          await Future.delayed(const Duration(milliseconds: 10));
+        }
+
+        // 等待所有异步保存完成
+        await Future.delayed(const Duration(milliseconds: 200));
+
+        // 队列长度不应超过 100
+        expect(service.pendingReportCount, lessThanOrEqualTo(100));
       });
     });
   });

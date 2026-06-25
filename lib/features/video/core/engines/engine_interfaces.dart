@@ -67,6 +67,18 @@ enum ErrorAction {
 
   /// 显示错误对话框
   showErrorDialog,
+
+  /// 从卡死状态恢复（Seek 到当前位置）
+  recoverFromStuck,
+
+  /// 从黑屏状态恢复（重新初始化播放器）
+  recoverFromBlackScreen,
+
+  /// 从无声状态恢复（重置音频管线）
+  recoverFromSilence,
+
+  /// 切换视频源
+  switchSource,
 }
 
 /// 错误处理结果

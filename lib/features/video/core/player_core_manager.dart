@@ -763,6 +763,43 @@ class PlayerCoreManager extends ChangeNotifier {
         }
         final nq = _errorHandler.findNextUntriedQuality();
         onError?.call(ErrorEvent(message: error, hasNextEpisode: hasNextEpisode, hasUntriedQuality: hasQualityOptions && nq >= 0, untriedQualityLabel: nq >= 0 ? _qualityLabels[nq] : null));
+      case ErrorAction.recoverFromStuck:
+        _logger.w('检测到播放卡死，尝试 Seek 恢复');
+        final pos = _player.state.position;
+        _player.seek(pos > Duration.zero ? pos : Duration.zero);
+      case ErrorAction.recoverFromBlackScreen:
+        _logger.w('检测到黑屏，重新初始化播放器');
+        final blackPos = _player.state.position;
+        initPlayerSync();
+        _openVideoWithCacheCheck(_url, '${_title}_$_currentEpisodeIndex').then((_) {
+          if (_isDisposed) return;
+          if (blackPos > Duration.zero) {
+            Future.delayed(const Duration(milliseconds: 300), () {
+              if (!_isDisposed) _player.seek(blackPos);
+            });
+          }
+        });
+      case ErrorAction.recoverFromSilence:
+        _logger.w('检测到无声，重置音频管线');
+        _player.setAudioTrack(AudioTrack.no());
+        Future.delayed(const Duration(milliseconds: 200), () {
+          if (!_isDisposed) {
+            _player.setAudioTrack(AudioTrack.auto());
+          }
+        });
+      case ErrorAction.switchSource:
+        _logger.w('当前源异常，切换到下一个视频源');
+        if (hasQualityOptions) {
+          final nextIdx = result.nextQualityIndex ?? (_currentQualityIndex + 1);
+          if (nextIdx < _qualityLabels.length) {
+            onQualityAutoSwitch?.call(QualityAutoSwitchEvent(_qualityLabels[nextIdx]));
+            _switchQualityInternal(nextIdx);
+          } else {
+            onError?.call(ErrorEvent(message: error, hasNextEpisode: hasNextEpisode, hasUntriedQuality: false));
+          }
+        } else {
+          onError?.call(ErrorEvent(message: error, hasNextEpisode: hasNextEpisode, hasUntriedQuality: false));
+        }
     }
   }
 

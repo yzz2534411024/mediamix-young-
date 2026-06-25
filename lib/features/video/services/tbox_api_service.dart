@@ -6,6 +6,7 @@ import 'package:logger/logger.dart';
 import '../models/video_models.dart';
 import 'spider/tvbox_config_parser.dart';
 import 'spider/tvbox_image_decoder.dart';
+import '../../../core/network/network_engine.dart';
 import '../../../core/network/proxy_config_service.dart';
 
 /// CMS API 视频服务
@@ -31,10 +32,6 @@ class VideoApiService {
   // 接口预请求缓存，10分钟TTL
   final Map<String, _PrefetchCacheEntry<VideoDetail>> _prefetchCache = {};
   static const Duration _prefetchCacheTtl = Duration(minutes: 10);
-
-  // CDN调度缓存，5分钟TTL
-  final Map<String, _CdnCacheEntry> _cdnCache = {};
-  static const Duration _cdnCacheTtl = Duration(minutes: 5);
 
   VideoApiService({Dio? dio}) : _dio = dio ?? _createDio();
 
@@ -238,51 +235,10 @@ class VideoApiService {
 
   // ==================== CDN调度 ====================
 
-  /// 选择最优CDN节点 - TCP测速后返回延迟最低的URL
+  /// 选择最优CDN节点 - 委托给 NetworkEngine 进行并行 TCP 测速
   /// 缓存5分钟TTL
   Future<String> selectBestCdn(List<String> cdnUrls) async {
-    if (cdnUrls.length <= 1) return cdnUrls.first;
-
-    final now = DateTime.now();
-    final cacheKey = cdnUrls.join('|');
-
-    // 检查缓存
-    final cached = _cdnCache[cacheKey];
-    if (cached != null && now.difference(cached.time) < _cdnCacheTtl) {
-      _logger.d('CDN调度命中缓存: ${cached.bestUrl}');
-      return cached.bestUrl;
-    }
-
-    // 并行测速所有CDN
-    final latencies = <String, int>{};
-    await Future.wait(
-      cdnUrls.map((url) async {
-        try {
-          final ms = await measureLatency(url);
-          latencies[url] = ms;
-        } catch (e) {
-          _logger.w('CDN测速失败: $url - $e');
-          latencies[url] = 99999; // 不可用标记为极大值
-        }
-      }),
-      eagerError: false,
-    );
-
-    // 选择延迟最低的
-    final bestEntry = latencies.entries.reduce(
-      (a, b) => a.value < b.value ? a : b,
-    );
-    final bestUrl = bestEntry.key;
-    _logger.d('CDN调度选择: $bestUrl (${bestEntry.value}ms)');
-
-    // 缓存结果
-    _cdnCache[cacheKey] = _CdnCacheEntry(
-      bestUrl: bestUrl,
-      latencyMs: bestEntry.value,
-      time: DateTime.now(),
-    );
-
-    return bestUrl;
+    return NetworkEngine.instance.selectBestCdn(cdnUrls);
   }
 
   /// 测量HTTP延迟 - 发起HEAD请求测量往返时间
@@ -544,7 +500,7 @@ class VideoApiService {
       // 检测 TVBox 配置格式
       if (data.containsKey('sites') && data['sites'] is List) {
         _logger.d('搜索响应是 TVBox 配置格式，返回空列表');
-        return VideoListResponse(list: [], page: 1, pageCount: 0, total: 0);
+        return const VideoListResponse(list: [], page: 1, pageCount: 0, total: 0);
       }
 
       return VideoListResponse.fromJson(data);
@@ -777,7 +733,6 @@ class VideoApiService {
   void clearAllCache() {
     _dnsCache.clear();
     _prefetchCache.clear();
-    _cdnCache.clear();
     _logger.d('所有缓存已清除');
   }
 }
@@ -798,19 +753,6 @@ class _PrefetchCacheEntry<T> {
   final DateTime time;
 
   _PrefetchCacheEntry({required this.data, required this.time});
-}
-
-/// CDN调度缓存条目
-class _CdnCacheEntry {
-  final String bestUrl;
-  final int latencyMs;
-  final DateTime time;
-
-  _CdnCacheEntry({
-    required this.bestUrl,
-    required this.latencyMs,
-    required this.time,
-  });
 }
 
 // ==================== 重试拦截器 ====================

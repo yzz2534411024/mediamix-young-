@@ -5,6 +5,20 @@ import '../../../../core/network/network_engine.dart';
 import 'engine_interfaces.dart';
 
 // ============================================================================
+// 错误分类枚举
+// ============================================================================
+
+/// 错误分类
+enum ErrorCategory {
+  network,    // 网络错误
+  codec,      // 编解码错误
+  source,     // 源站错误（404/403等）
+  timeout,    // 超时错误
+  stuck,      // 卡死/黑屏/无声
+  unknown,    // 未知错误
+}
+
+// ============================================================================
 // 播放错误处理器实现 — 从 PlayerCoreManager 提取的错误处理逻辑
 // ============================================================================
 
@@ -66,6 +80,27 @@ class PlaybackErrorHandlerImpl implements PlaybackErrorHandler {
   // 错误分类
   // ========================================================================
 
+  /// 对错误进行分类
+  ErrorCategory _categorizeError(String error) {
+    final lower = error.toLowerCase();
+    if (lower.contains('stuck') || lower.contains('deadlock') ||
+        lower.contains('no frame') || lower.contains('black screen') ||
+        lower.contains('no video') || lower.contains('no audio') ||
+        lower.contains('silence')) {
+      return ErrorCategory.stuck;
+    }
+    if (_isCodecError(error)) return ErrorCategory.codec;
+    if (_isErrorNetworkRelated(error)) return ErrorCategory.network;
+    if (lower.contains('404') || lower.contains('403') ||
+        lower.contains('not found') || lower.contains('forbidden')) {
+      return ErrorCategory.source;
+    }
+    if (lower.contains('timeout') || lower.contains('timed out')) {
+      return ErrorCategory.timeout;
+    }
+    return ErrorCategory.unknown;
+  }
+
   /// 判断错误是否为编解码相关
   bool _isCodecError(String error) {
     final lower = error.toLowerCase();
@@ -112,46 +147,70 @@ class PlaybackErrorHandlerImpl implements PlaybackErrorHandler {
     required int currentQualityIndex,
     required Duration lastPlaybackPosition,
   }) {
-    // 保存断点位置
     _lastPlaybackPosition = lastPlaybackPosition;
+    final category = _categorizeError(error);
 
-    // 1. 检查是否为编解码错误 + 硬解码开启 → 降级软解
-    if (_isCodecError(error) && hardwareDecodingEnabled) {
-      _logger.w('检测到硬解码失败，建议降级软解');
+    // 0. 状态机异常检测与恢复
+    final lower = error.toLowerCase();
+    if (lower.contains('stuck') || lower.contains('deadlock') || lower.contains('no frame')) {
+      _logger.w('检测到播放器卡死，尝试恢复');
+      return ErrorHandleResult(action: ErrorAction.recoverFromStuck);
+    }
+    if (lower.contains('black screen') || lower.contains('no video') || lower.contains('rendering_failed')) {
+      _logger.w('检测到黑屏异常，尝试恢复');
+      return ErrorHandleResult(action: ErrorAction.recoverFromBlackScreen);
+    }
+    if (lower.contains('no audio') || lower.contains('silence') || lower.contains('audio output failed')) {
+      _logger.w('检测到无声异常，尝试恢复');
+      return ErrorHandleResult(action: ErrorAction.recoverFromSilence);
+    }
+
+    // 1. 编解码错误 + 硬解码 → 降级软解
+    if (category == ErrorCategory.codec && hardwareDecodingEnabled) {
       return ErrorHandleResult(action: ErrorAction.downgradeToSoftwareDecode);
     }
 
-    // 2. 检查是否为网络错误 → 等待网络恢复
-    final isNetworkError = _isErrorNetworkRelated(error);
+    // 2. 源站错误 → 直接切换源（不重试同 URL）
+    if (category == ErrorCategory.source) {
+      _logger.w('源站错误，跳过重试直接切换源');
+      if (hasQualityOptions) {
+        _triedQualityIndices.add(currentQualityIndex);
+        final nextIndex = _findNextUntriedQuality();
+        if (nextIndex >= 0) {
+          return ErrorHandleResult(action: ErrorAction.switchToNextQuality, nextQualityIndex: nextIndex);
+        }
+      }
+      return ErrorHandleResult(action: ErrorAction.showErrorDialog);
+    }
 
-    if (isNetworkError) {
-      _logger.w('网络原因导致播放中断，等待网络恢复后自动重连');
+    // 3. 网络错误 → 等待网络恢复
+    if (category == ErrorCategory.network) {
       _isWaitingForNetwork = true;
       return ErrorHandleResult(action: ErrorAction.waitForNetworkRecovery);
     }
 
-    // 3. 非网络错误：快速重试一次（同 URL）
-    if (_retryCount < _maxAutoRetry) {
+    // 4. 超时 → 快速重试一次
+    if (category == ErrorCategory.timeout && _retryCount < _maxAutoRetry) {
       _retryCount++;
-      _logger.i('播放错误，自动重试 ($_retryCount/$_maxAutoRetry): $error');
       return ErrorHandleResult(action: ErrorAction.retrySameUrl);
     }
 
-    // 4. 降级策略：同 URL 重试失败后，尝试其他清晰度源
+    // 5. 未知错误 → 重试一次
+    if (_retryCount < _maxAutoRetry) {
+      _retryCount++;
+      return ErrorHandleResult(action: ErrorAction.retrySameUrl);
+    }
+
+    // 6. 降级策略
     if (hasQualityOptions && !_isWaitingForNetwork) {
       _triedQualityIndices.add(currentQualityIndex);
       final nextIndex = _findNextUntriedQuality();
       if (nextIndex >= 0) {
-        _logger.i('降级切换清晰度: 当前=$currentQualityIndex → 下一个=$nextIndex');
-        _retryCount = 0; // 重置重试计数，给新源一次重试机会
-        return ErrorHandleResult(
-          action: ErrorAction.switchToNextQuality,
-          nextQualityIndex: nextIndex,
-        );
+        _retryCount = 0;
+        return ErrorHandleResult(action: ErrorAction.switchToNextQuality, nextQualityIndex: nextIndex);
       }
     }
 
-    // 5. 所有源都失败，显示错误对话框
     return ErrorHandleResult(action: ErrorAction.showErrorDialog);
   }
 
