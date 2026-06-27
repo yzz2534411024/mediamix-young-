@@ -1,0 +1,1 @@
+Get-ChildItem -Path 'e:\mediamix-kmp' -Recurse -File -Include '*.kt','*.kts','*.yml','*.properties' | Where-Object { $_.FullName -notmatch '\\\.gradle\\|\\build\\|\\\.kotlin\\' } | ForEach-Object { $_.FullName.Replace('e:\mediamix-kmp\','') } | Sort-Object
