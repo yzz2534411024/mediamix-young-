@@ -505,3 +505,150 @@ class JavaBridgeManager {
 | Desktop 播放 | mpv via JNA | VLCJ | mpv 与现有底层一致，体积更小 |
 | Java Bridge | JVM 内直接加载 | HTTP 桥接 | 消除进程间通信开销 |
 | UI 框架 | Compose Multiplatform | JavaFX/Swing | Compose 与 Android 共用 UI 代码 |
+
+---
+
+## 阶段六「功能完善与发布准备」
+
+> 前置条件：阶段一~五已完成，累计 ~18,840 行 Kotlin 代码，613 个测试。
+> 当前存在 4 个关键阻塞项和多个 TODO 占位需完善，本阶段目标是全部清零并达到发布状态。
+
+### 6.1 关键阻塞项（P0）
+
+| # | 阻塞项 | 现状 | 修复方案 | 预估工时 |
+|---|--------|------|----------|----------|
+| P0-1 | **ProGuard 规则缺失** | `LocalProxyServer` 使用 `com.sun.net.httpserver.*`，R8 混淆后崩溃 | `proguard-rules.pro` 添加 dontwarn/keep 规则 | 15 分钟 |
+| P0-2 | **DatabaseDriverFactory 缺失** | SQLDelight 7 个 `.sq` 文件已定义，但无 expect/actual Driver 创建代码，`SharedModule` 未注册数据库 | 新增 expect/actual `DatabaseDriverFactory` + Repository 层 + `SharedModule` 注册 | 2 小时 |
+| P0-3 | **视频渲染 Surface 缺失** | `PlayerScreen.kt` 视频区域为黑色 `Box` 占位，`composeUi` 无 `androidMain`/`desktopMain` 源集 | 新增平台源集 + expect/actual `VideoSurface`（Android: `AndroidView`+`PlayerView`；Desktop: JNA 嵌入 mpv 窗口） | 4 小时 |
+| P0-4 | **Android Koin 初始化待确认** | `MediaMixApp.kt` 中 `startKoin` 调用需验证完整性（模块注册、平台 actual 注入） | 逐一核对 `SharedModule` 注册项，补充平台特定模块 | 30 分钟 |
+
+### 6.2 功能完善（P1）
+
+| # | 功能项 | 现状 | 完善方案 |
+|---|--------|------|----------|
+| P1-1 | **ViewModel 接入真实数据库** | `HistoryViewModel` / `FavoriteViewModel` 当前使用 TODO 占位 | 接入 SQLDelight DAO，实现真实 CRUD + Flow 观察 |
+| P1-2 | **SettingsViewModel 功能补全** | `exportData` / `clearCache` / `cacheStats` 均为 TODO | 实现数据导出（JSON）、缓存清理（递归删除）、缓存统计（目录遍历） |
+| P1-3 | **DownloadScreen 接入真实逻辑** | 当前完全占位，无实际功能 | 接入 `DownloadService`，实现下载列表、进度展示、暂停/恢复 |
+| P1-4 | **字幕叠加层** | `PlayerScreen` 字幕文本为 `null` 占位 | 接入 `SubtitleService`，实现字幕渲染叠加层（SRT/ASS 解析 + Compose Text 叠加） |
+
+### 6.3 工程化（P2）
+
+| # | 工程化项 | 内容 |
+|---|----------|------|
+| P2-1 | **CI/CD 流水线** | GitHub Actions：自动构建 + 测试 + 打包（Android APK + Desktop 安装包） |
+| P2-2 | **代码质量工具** | detekt（静态分析）+ ktlint（代码格式化）配置，集成到 Gradle 和 CI |
+| P2-3 | **Release 签名** | Android keystore 配置、签名 Gradle task、密钥安全管理 |
+
+### 6.4 任务拆分（8 个任务，4 波次）
+
+#### Wave 1（并行，无依赖）
+
+| 任务 | 内容 | 预估工时 |
+|------|------|----------|
+| **Task A** | ProGuard 规则修复 + Android Koin 初始化验证 | ~30 分钟 |
+| **Task B** | `DatabaseDriverFactory` expect/actual + Repository 层 + `SharedModule` 注册 | ~2 小时 |
+
+**Task A 详细步骤**：
+1. `androidApp/proguard-rules.pro` 添加：
+   ```proguard
+   -dontwarn com.sun.net.httpserver.**
+   -keep class com.sun.net.httpserver.** { *; }
+   -keep class io.ktor.server.sun.** { *; }
+   ```
+2. 验证 `MediaMixApp.kt` 中 `startKoin { modules(...) }` 包含所有必需模块
+3. 执行 `./gradlew :androidApp:assembleRelease` 验证 R8 不崩溃
+
+**Task B 详细步骤**：
+1. `shared/src/commonMain` 新增 `expect fun createDatabaseDriver(): SqlDriver`
+2. `androidApp/src/main` 新增 `actual fun`（Android SQLite）
+3. `desktopApp/src/main` 新增 `actual fun`（JDBC SQLite）
+4. 为 7 张表创建 Repository 类（`HistoryRepository`、`FavoriteRepository` 等）
+5. 在 `SharedModule` 中注册 Database + 所有 Repository
+
+#### Wave 2（并行，等 Wave 1 完成）
+
+| 任务 | 内容 | 预估工时 |
+|------|------|----------|
+| **Task C** | 视频渲染 Surface expect/actual + `composeUi` 平台源集 | ~4 小时 |
+| **Task D** | ViewModel 接入 SQLDelight DAO（History / Favorite / Settings / Download） | ~2 小时 |
+
+**Task C 详细步骤**：
+1. `composeUi/build.gradle.kts` 新增 `androidMain` / `desktopMain` 源集配置
+2. `composeUi/src/commonMain` 新增 `expect fun VideoSurface(modifier, playerEngine)`
+3. `composeUi/src/androidMain` 实现 `AndroidView` + `PlayerView`（ExoPlayer 渲染）
+4. `composeUi/src/desktopMain` 实现 JNA mpv 窗口嵌入（Swing `JPanel` + `AndroidView` 桥接）
+5. `PlayerScreen.kt` 中黑色 `Box` 替换为 `VideoSurface`
+
+**Task D 详细步骤**：
+1. `HistoryViewModel` — 注入 `HistoryRepository`，替换 TODO 为真实查询
+2. `FavoriteViewModel` — 注入 `FavoriteRepository`，替换 TODO 为真实 CRUD
+3. `SettingsViewModel` — 实现 `exportData`（JSON 序列化导出）、`clearCache`（递归删除缓存目录）、`cacheStats`（目录大小计算）
+4. `DownloadViewModel` — 注入 `DownloadService`，实现下载管理
+
+#### Wave 3（等 Wave 2 完成）
+
+| 任务 | 内容 | 预估工时 |
+|------|------|----------|
+| **Task E** | 字幕叠加层 + `PlayerScreen` 完善 | ~2 小时 |
+| **Task F** | `DownloadScreen` 接入真实逻辑 | ~1.5 小时 |
+
+**Task E 详细步骤**：
+1. 实现 SRT/ASS 字幕解析（复用 `SubtitleService`）
+2. `PlayerScreen` 添加字幕 `Text` 叠加层，绑定播放器时间轴
+3. 字幕开关、字号调节 UI
+
+**Task F 详细步骤**：
+1. `DownloadScreen` 接入 `DownloadViewModel`（Task D 已完成）
+2. 实现下载列表 UI（进度条、状态指示）
+3. 实现暂停/恢复/删除操作
+
+#### Wave 4（等全部完成）
+
+| 任务 | 内容 | 预估工时 |
+|------|------|----------|
+| **Task G** | CI/CD + 代码质量工具 + Release 签名 | ~3 小时 |
+| **Task H** | 全量构建验证 + 测试 | ~1 小时 |
+
+**Task G 详细步骤**：
+1. 创建 `.github/workflows/build.yml`：checkout → setup JDK → `./gradlew build` → `./gradlew test` → 打包
+2. 配置 detekt + ktlint Gradle 插件，CI 中执行 `./gradlew detekt ktlintCheck`
+3. 配置 Android 签名：`keystore.properties` + `signingConfigs` + `buildTypes.release`
+
+**Task H 详细步骤**：
+1. `./gradlew build` 全量编译（含 R8 Release）
+2. `./gradlew test` 全量测试
+3. `./gradlew :androidApp:assembleRelease` APK 构建
+4. `./gradlew :desktopApp:packageDistributionForCurrentOS` Desktop 包构建
+5. 手动验证：视频播放、历史/收藏读写、字幕显示
+
+### 6.5 依赖图
+
+```
+Task A (ProGuard+Koin) ──────────────────────────────┐
+Task B (DatabaseDriverFactory+Repository) ─→ Task D ─┤
+                                                      ├→ Task H (全量验证)
+Task C (VideoSurface) ─→ Task E (字幕+PlayerScreen) ─┤
+Task D (ViewModel+DAO) ─→ Task F (DownloadScreen) ───┤
+Task G (CI/CD+工具) ─────────────────────────────────┘
+```
+
+### 6.6 验证标准
+
+| # | 验证项 | 通过条件 |
+|---|--------|----------|
+| 1 | `./gradlew build` | 全量编译通过（含 R8 Release 构建，零 warning 阻塞） |
+| 2 | `./gradlew :androidApp:assembleRelease` | APK 构建成功，可安装运行 |
+| 3 | `./gradlew :desktopApp:packageDistributionForCurrentOS` | Desktop 安装包可用 |
+| 4 | `./gradlew test` | 所有测试通过（预期 650+） |
+| 5 | 视频播放器 | Android + Desktop 均可实际渲染画面（非黑屏） |
+| 6 | 历史/收藏 | 可真实读写 SQLDelight 数据库，重启后数据持久 |
+
+### 6.7 工时估算
+
+| 波次 | 任务 | 工时 |
+|------|------|------|
+| Wave 1 | Task A + Task B | ~2.5 小时 |
+| Wave 2 | Task C + Task D | ~6 小时 |
+| Wave 3 | Task E + Task F | ~3.5 小时 |
+| Wave 4 | Task G + Task H | ~4 小时 |
+| **合计** | | **~16 小时（约 2 个工作日）** |
