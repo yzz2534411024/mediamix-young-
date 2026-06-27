@@ -112,7 +112,6 @@ class SubtitleService {
     ));
     (d.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
       final client = HttpClient();
-      client.badCertificateCallback = (cert, host, port) => true;
       try { ProxyConfigService.instance.configureHttpClient(client); } catch (_) {}
       return client;
     };

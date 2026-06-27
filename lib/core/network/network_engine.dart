@@ -323,12 +323,16 @@ class NetworkConditionDetector {
   // 网络条件变化流控制器
   final _conditionController = StreamController<NetworkCondition>.broadcast();
 
+  // 带宽监听订阅（用于 dispose 时取消）
+  StreamSubscription<double>? _bandwidthSubscription;
+
   // 上次网络条件（用于检测变化）
   NetworkCondition _lastCondition = NetworkCondition.offline;
 
   NetworkConditionDetector(this._estimator) {
     // 监听带宽变化，更新网络条件
-    _estimator.onBandwidthChanged.listen(_onBandwidthChanged);
+    _bandwidthSubscription =
+        _estimator.onBandwidthChanged.listen(_onBandwidthChanged);
   }
 
   /// 当前网络条件
@@ -359,6 +363,7 @@ class NetworkConditionDetector {
 
   /// 释放资源
   void dispose() {
+    _bandwidthSubscription?.cancel();
     _conditionController.close();
   }
 }
@@ -441,7 +446,6 @@ class NetworkEngine {
     // 启用 HTTP/2、连接池优化 和 代理支持
     (_dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
       final client = HttpClient();
-      client.badCertificateCallback = (cert, host, port) => true;
       client.maxConnectionsPerHost = 8;
       client.idleTimeout = const Duration(seconds: 30);
 
@@ -803,6 +807,13 @@ class NetworkEngine {
   void clearRequestCache() {
     _cacheInterceptor.clearCache();
     _logger.d('请求缓存已清除');
+  }
+
+  /// 释放资源
+  void dispose() {
+    _conditionDetector.dispose();
+    _bandwidthEstimator.dispose();
+    _instance = null;
   }
 }
 

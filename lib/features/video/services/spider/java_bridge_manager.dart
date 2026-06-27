@@ -234,7 +234,6 @@ class JavaBridgeManager {
       // 下载 JAR
       _logger.d('下载蜘蛛 JAR: $url');
       final httpClient = HttpClient();
-      httpClient.badCertificateCallback = (cert, host, port) => true;
 
       final request = await httpClient.getUrl(Uri.parse(url));
       final response = await request.close();

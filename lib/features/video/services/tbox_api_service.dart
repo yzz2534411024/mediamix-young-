@@ -48,10 +48,9 @@ class VideoApiService {
       maxRedirects: 5,
     ));
 
-    // 允许自签名证书 + 代理配置
+    // 代理配置
     (dio.httpClientAdapter as IOHttpClientAdapter).createHttpClient = () {
       final client = HttpClient();
-      client.badCertificateCallback = (cert, host, port) => true;
       try {
         ProxyConfigService.instance.configureHttpClient(client);
       } catch (_) {}
@@ -520,7 +519,6 @@ class VideoApiService {
       client.connectionTimeout = const Duration(seconds: 10);
       client.idleTimeout = const Duration(seconds: 5);
       client.autoUncompress = false; // 禁止自动解压，避免 gzip 问题
-      client.badCertificateCallback = (cert, host, port) => true;
       try {
         ProxyConfigService.instance.configureHttpClient(client);
       } catch (_) {}

@@ -175,6 +175,11 @@ class PrivacyManagerService {
     _logger.i('用户拒绝数据分享');
   }
 
+  /// 释放资源
+  void dispose() {
+    _preferencesController.close();
+  }
+
   /// 重置所有隐私设置（调试用）
   Future<void> reset() async {
     _prefs = const PrivacyPreferences();

@@ -5,6 +5,12 @@ import 'package:media_kit/media_kit.dart';
 import 'app/router.dart';
 import 'core/services/theme_provider.dart';
 import 'core/services/video_cache_service.dart';
+import 'core/services/player_metrics_service.dart';
+import 'core/services/power_manager_service.dart';
+import 'core/services/data_reporter_service.dart';
+import 'core/services/metrics_collector_service.dart';
+import 'core/services/cache_strategy_manager.dart';
+import 'core/database/database.dart';
 import 'features/video/models/video_models.dart';
 import 'core/services/privacy_manager_service.dart';
 import 'core/network/network_engine.dart';
@@ -168,7 +174,25 @@ class _YoungAppState extends ConsumerState<YoungApp> {
 
   @override
   void dispose() {
+    // 停止本地代理服务器
     LocalProxyServer.instance.stop();
+
+    // 关闭 Java Bridge 进程
+    JavaBridgeManager.instance.shutdown();
+
+    // 释放单例服务资源（StreamController、Timer、Subscription）
+    VideoCacheService.instance.dispose();
+    PlayerMetricsService.instance.dispose();
+    PowerManagerService.instance.dispose();
+    DataReporterService.instance.dispose();
+    MetricsCollectorService.instance.dispose();
+    PrivacyManagerService.instance.dispose();
+    CacheStrategyManager.instance.dispose();
+    NetworkEngine.instance.dispose();
+
+    // 关闭数据库连接
+    AppDatabase.instance.close();
+
     super.dispose();
   }
 }
